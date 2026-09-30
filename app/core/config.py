@@ -1,11 +1,25 @@
+# =========================================================================
+# APPLICATION CONFIGURATION & VERSIONING (config.py)
+# Projet CENTAURE - Gouvernement de la Nouvelle-Calédonie
+# =========================================================================
+
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# 🎯 Semantic Versioning (SemVer) : MAJOR.MINOR.PATCH
+APP_VERSION = "1.0.0"
+APP_DATE = "30/09/2026"
+APP_ENV = "PRODUCTION"  # "BETA" ou "PRODUCTION"
 
-class Settings:
-    APP_NAME: str = "CENTAURE"
-    APP_VERSION: str = "0.1.0"
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "dev_secret_key_change_in_prod")
+APP_NAME = "CENTAURE"
+APP_SUBTITLE = "Hypervision & Gestion de crises"
+APP_AUTHOR = "Éric KUTER"
 
-settings = Settings()
+# Dynamic display string for UI Headers
+DISPLAY_VERSION = (
+    f"v{APP_VERSION}" if APP_ENV == "PRODUCTION" else f"v{APP_VERSION}-{APP_ENV}"
+)
+
+# Supabase & Application Settings
+SECRET_KEY = os.getenv("SECRET_KEY", "centaure_secret_key_prod_2026")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")

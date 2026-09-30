@@ -1,5 +1,5 @@
 from nicegui import ui
-from app.services.database_service import db_service
+from app.services.database_service import db_service, DatabaseService
 
 # Référentiel de la Doctrine officielle CENTAURE
 DOCTRINE_INFO = {
@@ -72,7 +72,7 @@ def create_site_page(code_site: str):
             badge_armed.set_visibility(False)
 
     content_container = ui.column().classes(
-        "w-full px-8 py-4 gap-4 bg-slate-900 h-[calc(100vh-65px)] text-slate-100 items-center justify-start overflow-hidden"
+        "w-full px-8 py-4 gap-4 bg-slate-900 h-[calc(100vh-65px)] text-slate-100 items-center justify-start overflow-y-auto"
     )
 
     def start_siren():
@@ -135,6 +135,9 @@ def create_site_page(code_site: str):
         state["current_surete"] = site.surete_niveau
         content_container.clear()
 
+        # Récupération du protocole actif en cours d'application sur ce site
+        active_proto = DatabaseService.get_active_protocol_for_site(code_site)
+
         # Calcul dynamique des styles CSS de la carte Sûreté selon le niveau (S1 à S4)
         if site.surete_niveau == "S4":
             surete_card_style = "w-full p-5 bg-red-950/80 border-2 border-red-600 items-center justify-between shadow-2xl animate-pulse"
@@ -148,7 +151,7 @@ def create_site_page(code_site: str):
                 "text-2xl font-extrabold tracking-tight text-slate-200"
             )
 
-            # 1. GRILLE CÔTE À CÔTE (GRID 2 COLONNES)
+            # 1. GRILLE CÔTE À CÔTE (GRID 2 COLONNES : SÛRETÉ / TECHNIQUE)
             with ui.grid(columns=2).classes("w-full max-w-5xl gap-6 my-2"):
 
                 # --- CARTE SÛRETÉ DYNAMIQUE ---
@@ -201,16 +204,82 @@ def create_site_page(code_site: str):
                                 "text-xs text-slate-400 italic"
                             )
 
-            # 2. BANDEAU DES MOTIFS ET CONSIGNES
+            # 2. BANDEAU DES CONSIGNES OPÉRATIONNELLES EN VIGUEUR (AMÉLIORÉ & ADOUCI)
+            if active_proto:
+                level = active_proto.get("niveau", site.surete_niveau)
+
+                # Thème adouci (moins agressif) selon le niveau S
+                if level == "S4":
+                    border_color = "border-red-600/80 bg-red-950/40 animate-pulse"
+                    badge_color = "negative"
+                elif level == "S3":
+                    border_color = "border-orange-500/50 bg-slate-800/90"
+                    badge_color = "orange-8"
+                elif level == "S2":
+                    border_color = "border-amber-500/40 bg-slate-800/90 shadow-lg"  # Ambre doux & fond Slate reposant
+                    badge_color = "warning"
+                else:
+                    border_color = "border-emerald-500/40 bg-slate-800/90"
+                    badge_color = "positive"
+
+                # Traitement propre des retours à la ligne (\n)
+                raw_consignes = active_proto.get(
+                    "consignes", "_Aucune consigne rédigée._"
+                )
+                formatted_consignes = raw_consignes.replace("\\n", "\n")
+
+                with ui.card().classes(
+                    f"w-full max-w-5xl border {border_color} p-4 rounded-xl my-2"
+                ):
+                    with ui.row().classes(
+                        "items-center justify-between mb-3 border-b border-slate-700/80 pb-2 w-full"
+                    ):
+                        with ui.row().classes("items-center gap-2.5"):
+                            ui.icon(
+                                "assignment",
+                                color="amber-4" if level == "S2" else "blue-4",
+                                size="sm",
+                            )
+                            ui.label(
+                                f"PROTOCOLE EN VIGUEUR : {active_proto.get('titre')}"
+                            ).classes(
+                                "font-bold text-base text-slate-100 tracking-wide"
+                            )
+                        ui.badge(f"POSTURE {level}", color=badge_color).classes(
+                            "font-extrabold text-xs px-2.5 py-1"
+                        )
+
+                    ui.label(
+                        "DIRECTIVES & CONSIGNES OPÉRATIONNELLES TERRAIN :"
+                    ).classes(
+                        "text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2"
+                    )
+
+                    # Boîte de consignes à fond sombre doux avec saut de ligne respecté (whitespace-pre-line / markdown)
+                    with ui.column().classes(
+                        "w-full bg-slate-950/70 p-4 rounded-lg border border-slate-800"
+                    ):
+                        ui.markdown(formatted_consignes).classes(
+                            "text-sm text-slate-200 leading-relaxed space-y-1"
+                        )
+            else:
+                with ui.card().classes(
+                    "w-full max-w-5xl bg-slate-800/40 border border-slate-700 p-3 items-center justify-center my-2"
+                ):
+                    ui.label(
+                        "Aucun protocole spécifique n'est actuellement sélectionné pour cette posture."
+                    ).classes("text-xs text-slate-400 italic")
+
+            # 3. ANOMALIES & DYSFONCTIONNEMENTS TECHNIQUES EN COURS
             if site.anomalies:
                 with ui.card().classes(
-                    "w-full max-w-5xl bg-slate-800/90 border border-amber-500/50 p-4 shadow-xl"
+                    "w-full max-w-5xl bg-slate-800/90 border border-amber-500/50 p-4 shadow-xl mb-2"
                 ):
                     with ui.row().classes(
                         "items-center gap-2 mb-2 border-b border-slate-700 pb-1 w-full"
                     ):
                         ui.icon("warning", color="amber", size="xs")
-                        ui.label("CONSIGNES & MOTIFS DES ALERTES EN COURS").classes(
+                        ui.label("ANOMALIES ET MAINTENANCES EN COURS").classes(
                             "font-bold text-xs text-amber-400 tracking-wide"
                         )
 
@@ -234,15 +303,8 @@ def create_site_page(code_site: str):
                                 ui.label(ano.description or "Aucune précision").classes(
                                     "text-slate-300 italic"
                                 )
-            else:
-                with ui.card().classes(
-                    "w-full max-w-5xl bg-slate-800/40 border border-slate-700 p-3 items-center justify-center"
-                ):
-                    ui.label(
-                        "Aucun dysfonctionnement technique ou alerte particulière signalée."
-                    ).classes("text-xs text-slate-400 italic")
 
-            # 3. BANDEAU DE CONFIRMATION S4 ACQUITTÉ
+            # 4. BANDEAU DE CONFIRMATION S4 ACQUITTÉ
             if site.surete_niveau == "S4" and state["acquitte"]:
                 with ui.card().classes(
                     "w-full max-w-5xl bg-red-950/80 border-2 border-red-600 p-3 items-center shadow-2xl"
@@ -253,7 +315,7 @@ def create_site_page(code_site: str):
                             "ORDRE DE CONFINEMENT S4 ACQUITTÉ PAR L'AGENT - CONSIGNES EN COURS"
                         ).classes("font-bold text-xs tracking-wide")
 
-            # 4. POP-UP DE CONFINEMENT S4
+            # 5. POP-UP DE CONFINEMENT S4
             if (
                 site.surete_niveau == "S4"
                 and not state["dialog_open"]
@@ -276,17 +338,20 @@ def create_site_page(code_site: str):
                         "text-sm font-bold text-slate-300 mb-2"
                     )
 
-                    raw_protocol = (
-                        site.protocole_confinement
+                    # Utilisation du protocole S4 actif sinon texte par défaut
+                    s4_proto_text = (
+                        active_proto.get("consignes")
+                        if active_proto and active_proto.get("niveau") == "S4"
+                        else site.protocole_confinement
                         or "Appliquer la procédure de confinement générale du site."
                     )
-                    formatted_protocol = raw_protocol.replace("\\n", "\n")
+                    formatted_protocol = s4_proto_text.replace("\\n", "\n")
 
                     with ui.card().classes(
                         "w-full bg-slate-900 p-5 border border-red-900/80 mb-6 text-left"
                     ):
-                        ui.label(formatted_protocol).classes(
-                            "text-base text-slate-100 whitespace-pre-line font-mono leading-relaxed"
+                        ui.markdown(formatted_protocol).classes(
+                            "text-base text-slate-100 font-mono leading-relaxed"
                         )
 
                     def acquitter():
@@ -295,7 +360,7 @@ def create_site_page(code_site: str):
                             site.id, agent_nom=f"Agent {site.code_site}"
                         ):
                             ui.notify(
-                                "Acquittement transmis au PC Crise ! Alarme sonore coupée.",
+                                "Acquittement transmitted au PC Crise ! Alarme sonore coupée.",
                                 type="positive",
                             )
                             state["dialog_open"] = False

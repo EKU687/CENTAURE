@@ -49,17 +49,23 @@ class DatabaseService:
 
     @staticmethod
     def update_site_status(
-        site_id: str, surete: str, technique: str, motif: Optional[str] = None
+        site_id: str,
+        surete: str,
+        technique: str,
+        motif: Optional[str] = None,
+        active_protocol_id: Optional[str] = None,
     ) -> bool:
-        """Met à jour les niveaux S et T d'un site et insère un motif/commentaire si fourni."""
+        """Met à jour les niveaux S et T d'un site, le protocole actif retenu et insère un motif."""
         try:
-            supabase.table("centaure_sites").update(
-                {
-                    "surete_niveau": surete,
-                    "technique_niveau": technique,
-                    "updated_at": "now()",
-                }
-            ).eq("id", site_id).execute()
+            payload = {
+                "surete_niveau": surete,
+                "technique_niveau": technique,
+                "updated_at": "now()",
+            }
+            if active_protocol_id is not None:
+                payload["active_protocol_id"] = active_protocol_id
+
+            supabase.table("centaure_sites").update(payload).eq("id", site_id).execute()
 
             if motif and motif.strip():
                 domaine_impacte = (
@@ -180,7 +186,7 @@ class DatabaseService:
     def update_site_info(
         site_id: str, nom: str, localisation: str, protocole: Optional[str] = None
     ) -> bool:
-        """Met à jour les informations d'un site."""
+        """Met à jour les informations de base d'un site."""
         try:
             supabase.table("centaure_sites").update(
                 {
@@ -203,6 +209,110 @@ class DatabaseService:
             return True
         except Exception as e:
             print(f"❌ Erreur suppression site : {e}")
+            return False
+
+    # =========================================================================
+    # 📜 GESTION DYNAMIQUE DES PROTOCOLES PAR SITE & RÉFÉRENTIEL
+    # =========================================================================
+
+    @staticmethod
+    def get_site_protocols(site_code: str) -> List[Dict[str, Any]]:
+        """Récupère tous les protocoles spécifiques configurés pour un site (ex: DINUM, DOUMER)."""
+        try:
+            res = (
+                supabase.table("centaure_site_protocols")
+                .select("*")
+                .eq("site_code", str(site_code))
+                .order("niveau", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"❌ Erreur récupération protocoles site ({site_code}) : {e}")
+            return []
+
+    @staticmethod
+    def save_site_protocol(protocol_data: Dict[str, Any]) -> bool:
+        """Crée ou met à jour un protocole sur-mesure pour un site."""
+        try:
+            payload = {
+                "site_code": str(protocol_data.get("site_code")),
+                "niveau": str(protocol_data.get("niveau")).upper(),
+                "titre": str(protocol_data.get("titre")).strip(),
+                "consignes": str(protocol_data.get("consignes", "")).strip(),
+                "updated_at": "now()",
+            }
+            if protocol_data.get("id"):
+                supabase.table("centaure_site_protocols").update(payload).eq(
+                    "id", str(protocol_data["id"])
+                ).execute()
+            else:
+                supabase.table("centaure_site_protocols").insert(payload).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Erreur enregistrement protocole site : {e}")
+            return False
+
+    @staticmethod
+    def delete_site_protocol(protocol_id: str) -> bool:
+        """Supprime un protocole spécifique d'un site."""
+        try:
+            supabase.table("centaure_site_protocols").delete().eq(
+                "id", str(protocol_id)
+            ).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Erreur suppression protocole site : {e}")
+            return False
+
+    @staticmethod
+    def get_all_ref_protocols() -> List[Dict[str, Any]]:
+        """Récupère l'ensemble des modèles de protocoles du référentiel administrateur."""
+        try:
+            res = (
+                supabase.table("centaure_ref_protocols")
+                .select("*")
+                .order("niveau_cible", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"❌ Erreur récupération référentiel protocoles : {e}")
+            return []
+
+    @staticmethod
+    def save_ref_protocol(ref_data: Dict[str, Any]) -> bool:
+        """Crée ou met à jour un modèle de protocole dans le référentiel admin."""
+        try:
+            payload = {
+                "code": str(ref_data.get("code")).strip().upper(),
+                "titre": str(ref_data.get("titre")).strip(),
+                "niveau_cible": str(ref_data.get("niveau_cible")).upper(),
+                "consignes_standard": str(
+                    ref_data.get("consignes_standard", "")
+                ).strip(),
+            }
+            if ref_data.get("id"):
+                supabase.table("centaure_ref_protocols").update(payload).eq(
+                    "id", str(ref_data["id"])
+                ).execute()
+            else:
+                supabase.table("centaure_ref_protocols").insert(payload).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Erreur enregistrement référentiel protocole : {e}")
+            return False
+
+    @staticmethod
+    def delete_ref_protocol(ref_id: str) -> bool:
+        """Supprime un modèle du référentiel administrateur."""
+        try:
+            supabase.table("centaure_ref_protocols").delete().eq(
+                "id", str(ref_id)
+            ).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Erreur suppression modèle référentiel : {e}")
             return False
 
     # =========================================================================
@@ -490,6 +600,245 @@ class DatabaseService:
         except Exception as e:
             print(f"⚠️ Erreur retrait : {e}")
             return False
+
+    @staticmethod
+    def get_active_protocol_for_site(site_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère le protocole actif sélectionné pour un site via sa colonne active_protocol_id,
+        ou à défaut le premier protocole correspondant au niveau de sûreté actuel.
+        """
+        try:
+            # 1. Récupérer le site avec son niveau et son active_protocol_id
+            res_site = (
+                supabase.table("centaure_sites")
+                .select("surete_niveau, active_protocol_id")
+                .eq("code_site", str(site_code))
+                .execute()
+            )
+            if not res_site.data:
+                return None
+
+            site_data = res_site.data[0]
+            active_proto_id = site_data.get("active_protocol_id")
+            current_s = site_data.get("surete_niveau")
+
+            # 2. Si un protocole spécifique est ciblé via active_protocol_id
+            if active_proto_id:
+                res_proto = (
+                    supabase.table("centaure_site_protocols")
+                    .select("*")
+                    .eq("id", str(active_proto_id))
+                    .execute()
+                )
+                if res_proto.data:
+                    return res_proto.data[0]
+
+            # 3. Fallback : Prendre le premier protocole du site qui correspond au niveau S actuel
+            res_fallback = (
+                supabase.table("centaure_site_protocols")
+                .select("*")
+                .eq("site_code", str(site_code))
+                .eq("niveau", str(current_s))
+                .execute()
+            )
+            return res_fallback.data[0] if res_fallback.data else None
+
+        except Exception as e:
+            print(f"❌ Erreur récupération protocole actif site ({site_code}) : {e}")
+            return None
+
+    @staticmethod
+    def get_site_by_kiosk_token(token: str) -> Optional[Dict[str, Any]]:
+        """Récupère le site correspondant au jeton d'accès permanent du poste de garde."""
+        try:
+            res = (
+                supabase.table("centaure_sites")
+                .select("*")
+                .eq("kiosk_token", str(token).strip())
+                .execute()
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"❌ Erreur vérification token kiosque ({token}) : {e}")
+            return None
+
+    @staticmethod
+    def get_kiosk_url_for_site(
+        code_site: str, base_url: str = "http://localhost:8080"
+    ) -> str:
+        """
+        Génère ou récupère l'URL d'accès permanent sécurisée (Kiosque) pour le poste de garde.
+        """
+        clean_code = str(code_site).strip()
+        try:
+            # 1. Requête Supabase avec filtre insensible à la casse (ilike)
+            res = (
+                supabase.table("centaure_sites")
+                .select("id, code_site, kiosk_token")
+                .ilike("code_site", clean_code)
+                .execute()
+            )
+
+            print(
+                f"🔍 [DEBUG KIOSK] Recherche site '{clean_code}' -> Résultat BDD : {res.data}"
+            )
+
+            if res.data:
+                site_record = res.data[0]
+                token = site_record.get("kiosk_token")
+
+                # 2. Si le token est NULL, on génère un UUID à la volée et on le sauvegarde
+                if not token:
+                    import uuid
+
+                    new_token = str(uuid.uuid4())
+                    supabase.table("centaure_sites").update(
+                        {"kiosk_token": new_token}
+                    ).eq("id", site_record["id"]).execute()
+                    token = new_token
+
+                return f"{base_url.rstrip('/')}/kiosk?token={token}"
+
+            print(
+                f"⚠️ [DEBUG KIOSK] Aucun site trouvé dans Supabase pour le code : '{clean_code}'"
+            )
+            return f"{base_url.rstrip('/')}/kiosk?token=site-non-trouve-{clean_code}"
+
+        except Exception as e:
+            print(f"❌ [DEBUG KIOSK] Erreur Supabase pour ({clean_code}) : {e}")
+            return f"{base_url.rstrip('/')}/kiosk?token=erreur-connexion"
+
+    @staticmethod
+    def authenticate_user(username: str, password_plain: str) -> Optional[dict]:
+        """Vérifie les identifiants d'un utilisateur du Cockpit."""
+        try:
+            res = (
+                supabase.table("centaure_users")
+                .select("id, username, nom_complet, role, password_hash")
+                .eq("username", str(username).strip().lower())
+                .execute()
+            )
+            if res.data:
+                user = res.data[0]
+                # Comparaison directe (ou vérification de hash bcrypt)
+                if user.get("password_hash") == password_plain:
+                    return {
+                        "id": user["id"],
+                        "username": user["username"],
+                        "nom_complet": user["nom_complet"],
+                        "role": user["role"],
+                    }
+            return None
+        except Exception as e:
+            print(f"❌ Erreur lors de l'authentification : {e}")
+            return None
+
+    @staticmethod
+    def get_all_users() -> list:
+        """Récupère la liste de tous les utilisateurs du Cockpit."""
+        try:
+            res = (
+                supabase.table("centaure_users")
+                .select("id, username, nom_complet, role, created_at")
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"❌ Erreur récupération utilisateurs : {e}")
+            return []
+
+    @staticmethod
+    def save_user(user_data: dict) -> bool:
+        """Crée ou met à jour un utilisateur."""
+        try:
+            if "id" in user_data and user_data["id"]:
+                supabase.table("centaure_users").update(user_data).eq(
+                    "id", user_data["id"]
+                ).execute()
+            else:
+                supabase.table("centaure_users").insert(user_data).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Erreur sauvegarde utilisateur : {e}")
+            return False
+
+    @staticmethod
+    def delete_user(user_id: str) -> bool:
+        """Supprime un utilisateur par son UUID."""
+        try:
+            supabase.table("centaure_users").delete().eq("id", user_id).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Erreur suppression utilisateur : {e}")
+            return False
+
+    @staticmethod
+    def save_yubikey_credential(user_id: str, credential_id: str) -> bool:
+        """Enregistre le credential_id de la YubiKey associée à un utilisateur dans Supabase."""
+        try:
+            payload = {
+                "user_id": user_id,
+                "credential_id": credential_id,
+                "public_key": "stored_fido2_key",  # Empreinte de clé
+            }
+            supabase.table("centaure_yubikeys").insert(payload).execute()
+            print(f"✅ [YUBIKEY] Clé FIDO2 enregistrée pour l'utilisateur {user_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Erreur sauvegarde YubiKey dans BDD : {e}")
+            return False
+
+    @staticmethod
+    def save_yubikey_public_id(user_id: str, public_id: str) -> bool:
+        """Enregistre l'identifiant public unique de la YubiKey pour un utilisateur."""
+        try:
+            payload = {
+                "user_id": user_id,
+                "credential_id": public_id[
+                    :12
+                ],  # Extrait les 12 caractères de la clé publique
+                "public_key": "yubikey_otp_public",
+            }
+            supabase.table("centaure_yubikeys").insert(payload).execute()
+            print(
+                f"✅ [YUBIKEY] Identifiant public {public_id[:12]} associé à l'utilisateur {user_id}"
+            )
+            return True
+        except Exception as e:
+            print(f"❌ Erreur sauvegarde YubiKey Supabase : {e}")
+            return False
+
+    @staticmethod
+    def authenticate_by_yubikey(yubi_raw_input: str) -> Optional[dict]:
+        """Authentifie un utilisateur grâce aux 12 premiers caractères de sa YubiKey OTP."""
+        try:
+            if not yubi_raw_input or len(yubi_raw_input.strip()) < 12:
+                return None
+
+            public_id = yubi_raw_input.strip()[:12]
+            print(f"🔑 [YUBIKEY LOGIN] Clé Publique soumise : {public_id}")
+
+            # Recherche dans centaure_yubikeys
+            res = (
+                supabase.table("centaure_yubikeys")
+                .select("user_id, centaure_users(id, username, nom_complet, role)")
+                .eq("credential_id", public_id)
+                .execute()
+            )
+
+            if res.data and len(res.data) > 0:
+                user_info = res.data[0].get("centaure_users")
+                if user_info:
+                    print(
+                        f"✅ [YUBIKEY LOGIN] Utilisateur reconnu : {user_info['username']}"
+                    )
+                    return user_info
+
+            print(f"⚠️️ [YUBIKEY LOGIN] Clé {public_id} inconnue en base de données.")
+            return None
+        except Exception as e:
+            print(f"❌ Erreur lors de l'authentification YubiKey : {e}")
+            return None
 
 
 db_service = DatabaseService()

@@ -1,10 +1,11 @@
 import asyncio
 from nicegui import app, ui
-from app.core.config import settings
+from app.core import config
 from app.services.database_service import DatabaseService
 from app.models.site import SiteCritique
-import app.ui.crises_ui as crises_ui  # <--- Module autonome des crises
-import app.ui.annuaire_ui as annuaire_ui  # <--- Import du composant RH
+import app.ui.crises_ui as crises_ui
+import app.ui.annuaire_ui as annuaire_ui
+import app.ui.users_ui as users_ui
 
 
 def get_status_color(level: str) -> str:
@@ -65,18 +66,15 @@ def open_new_site_dialog():
         )
         input_nom = ui.input(label="Nom complet de l'infrastructure").classes("w-full")
         input_loc = ui.input(label="Localisation / Commune").classes("w-full")
-        input_proto = ui.textarea(
-            label="Protocole de Confinement (Consignes S4)"
-        ).classes("w-full")
 
         async def save_new_site():
             if input_code.value and input_nom.value:
                 ok = await asyncio.to_thread(
-                    DatabaseService.create_site,
+                    DatabaseService.update_site_info,
                     input_code.value,
                     input_nom.value,
                     input_loc.value or "",
-                    input_proto.value or "",
+                    None,
                 )
                 if ok:
                     ui.notify("Nouveau site ajouté avec succès !", type="positive")
@@ -102,7 +100,7 @@ def open_new_site_dialog():
 
 
 def open_inspection_dialog(site: SiteCritique):
-    """Boîte de dialogue d'inspection, d'édition et d'administration du site avec motifs."""
+    """Boîte de dialogue d'inspection, d'édition et d'administration du site avec gestion dynamique des protocoles."""
     with ui.dialog() as dialog, ui.card().classes(
         "w-full max-w-2xl bg-slate-900 border border-slate-700 text-slate-100 p-6"
     ):
@@ -116,11 +114,13 @@ def open_inspection_dialog(site: SiteCritique):
                 )
             ui.button(icon="close", on_click=dialog.close).props("flat round dense")
 
-        # 1. Admin Niveaux S/T + Saisie du Motif
+        # ----------------------------------------------------------------------
+        # 1. Admin Niveaux S/T + Sélection du Protocole Spécifique + Motif
+        # ----------------------------------------------------------------------
         with ui.column().classes(
             "w-full bg-slate-800/80 p-4 rounded border border-slate-700 my-4 gap-3"
         ):
-            ui.label("Administration des Niveaux (Doctrine)").classes(
+            ui.label("Administration des Niveaux & Événements").classes(
                 "text-sm font-bold text-slate-300"
             )
 
@@ -136,8 +136,34 @@ def open_inspection_dialog(site: SiteCritique):
                     label="Niveau Technique",
                 ).classes("w-40")
 
+            select_protocol = ui.select(
+                options={},
+                label="Protocole à appliquer pour cette posture",
+            ).classes("w-full mt-1")
+
+            async def load_protocols_for_select():
+                protocols = await asyncio.to_thread(
+                    DatabaseService.get_site_protocols, site.code_site
+                )
+                filtered = {
+                    p["id"]: f"[{p['niveau']}] {p['titre']}"
+                    for p in protocols
+                    if p["niveau"] == select_s.value
+                }
+                select_protocol.options = filtered
+                if filtered:
+                    if site.active_protocol_id in filtered:
+                        select_protocol.value = site.active_protocol_id
+                    else:
+                        select_protocol.value = list(filtered.keys())[0]
+                else:
+                    select_protocol.value = None
+
+            select_s.on("update:model-value", lambda: load_protocols_for_select())
+            ui.timer(0.1, load_protocols_for_select, once=True)
+
             input_motif = ui.input(
-                label="Motif / Commentaire (ex: Panne contrôle d'accès, Infiltration...)",
+                label="Motif / Commentaire (ex: Visite du Ministre, Réunion GNC...)",
                 placeholder="Renseigner la raison du changement de niveau...",
             ).classes("w-full mt-1")
 
@@ -148,6 +174,7 @@ def open_inspection_dialog(site: SiteCritique):
                     select_s.value,
                     select_t.value,
                     input_motif.value,
+                    select_protocol.value,
                 )
                 if ok:
                     if select_s.value == "S4":
@@ -157,49 +184,279 @@ def open_inspection_dialog(site: SiteCritique):
                         )
                     else:
                         ui.notify(
-                            "Statuts S/T et motif consignés avec succès !",
+                            "Statuts S/T et protocole consignés avec succès !",
                             type="positive",
                         )
                     dialog.close()
                     ui.navigate.reload()
 
-            ui.button("Applique & Consigner", icon="save", on_click=save_status).props(
+            ui.button("Appliquer & Consigner", icon="save", on_click=save_status).props(
                 "color=blue sm"
             ).classes("mt-2 self-end")
 
-        # 2. Édition Fiche & Protocole
-        with ui.expansion("Éditer la Fiche & Protocole S4", icon="edit").classes(
-            "w-full bg-slate-800 border border-slate-700 rounded mb-4"
-        ):
-            with ui.column().classes("p-3 gap-3 w-full"):
-                edit_nom = ui.input(label="Nom du site", value=site.nom).classes(
-                    "w-full"
-                )
-                edit_loc = ui.input(
-                    label="Localisation", value=site.localisation or ""
-                ).classes("w-full")
-                edit_proto = ui.textarea(
-                    label="Protocole S4", value=site.protocole_confinement or ""
-                ).classes("w-full")
+        # ----------------------------------------------------------------------
+        # 2. Gestion Dynamique des Protocoles du Site
+        # ----------------------------------------------------------------------
+        with ui.expansion(
+            "📜 Éditer la Fiche & Gestionnaire des Protocoles", icon="edit"
+        ).classes("w-full bg-slate-800 border border-slate-700 rounded mb-4"):
+            with ui.column().classes("p-4 gap-4 w-full"):
+                with ui.row().classes("w-full gap-3"):
+                    edit_nom = ui.input(label="Nom du site", value=site.nom).classes(
+                        "w-1/2"
+                    )
+                    edit_loc = ui.input(
+                        label="Localisation", value=site.localisation or ""
+                    ).classes("w-1/2")
 
-                async def update_info():
+                async def update_info_base():
                     ok = await asyncio.to_thread(
                         DatabaseService.update_site_info,
                         site.id,
                         edit_nom.value,
                         edit_loc.value,
-                        edit_proto.value,
+                        None,
                     )
                     if ok:
-                        ui.notify("Fiche site mise à jour !", type="positive")
-                        dialog.close()
+                        ui.notify("Nom et Localisation mis à jour !", type="positive")
                         ui.navigate.reload()
 
                 ui.button(
-                    "Enregistrer les modifications", icon="check", on_click=update_info
+                    "Mettre à jour l'identité", icon="check", on_click=update_info_base
                 ).props("color=blue sm")
 
-        # 3. Suivi & Anomalies Enregistrées
+                ui.separator().classes("bg-slate-700 my-2")
+
+                protocols_container = ui.column().classes("w-full gap-2")
+
+                async def refresh_protocols_list():
+                    protocols_container.clear()
+                    current_protocols = await asyncio.to_thread(
+                        DatabaseService.get_site_protocols, site.code_site
+                    )
+
+                    with protocols_container:
+                        if not current_protocols:
+                            ui.label(
+                                "Aucun protocole sur-mesure configuré pour ce site."
+                            ).classes("text-gray-400 italic text-xs p-1")
+
+                        for proto in current_protocols:
+                            badge_color = get_status_color(proto.get("niveau", "S1"))
+                            is_active = proto.get("id") == site.active_protocol_id
+                            card_border = (
+                                "border-2 border-emerald-500/80 shadow-emerald-500/10"
+                                if is_active
+                                else "border border-slate-700"
+                            )
+
+                            with ui.card().classes(
+                                f"w-full bg-slate-900/90 text-slate-100 p-3 rounded {card_border}"
+                            ):
+                                with ui.row().classes(
+                                    "w-full items-center justify-between"
+                                ):
+                                    with ui.row().classes("items-center gap-2"):
+                                        ui.badge(
+                                            proto.get("niveau", "S1"), color=badge_color
+                                        ).classes("font-bold")
+                                        ui.label(
+                                            proto.get("titre", "Sans Titre")
+                                        ).classes("font-bold text-sm")
+                                        if is_active:
+                                            ui.badge(
+                                                "EN VIGUEUR", color="positive"
+                                            ).props("outline").classes("text-[10px]")
+
+                                    with ui.row().classes("gap-1"):
+                                        ui.button(
+                                            icon="edit",
+                                            on_click=lambda p=proto: open_protocol_editor(
+                                                p
+                                            ),
+                                        ).props(
+                                            "flat round dense color=primary"
+                                        ).tooltip(
+                                            "Éditer"
+                                        )
+
+                                        ui.button(
+                                            icon="delete",
+                                            on_click=lambda p=proto: delete_protocol_action(
+                                                p
+                                            ),
+                                        ).props(
+                                            "flat round dense color=negative"
+                                        ).tooltip(
+                                            "Supprimer"
+                                        )
+
+                                with ui.expansion(
+                                    "Consignes d'application", icon="notes"
+                                ).classes(
+                                    "w-full text-xs text-slate-300 mt-2 bg-slate-950 p-1 rounded"
+                                ):
+                                    ui.markdown(
+                                        proto.get(
+                                            "consignes", "_Aucune consigne rédigée._"
+                                        )
+                                    )
+
+                async def delete_protocol_action(proto: dict):
+                    ok = await asyncio.to_thread(
+                        DatabaseService.delete_site_protocol, proto["id"]
+                    )
+                    if ok:
+                        ui.notify("Protocole supprimé.", type="warning")
+                        await refresh_protocols_list()
+                        await load_protocols_for_select()
+
+                def open_protocol_editor(proto=None):
+                    is_edit = proto is not None
+                    p_data = proto or {
+                        "site_code": site.code_site,
+                        "niveau": "S2",
+                        "titre": f"Protocole Spécifique - {site.code_site}",
+                        "consignes": "",
+                    }
+
+                    with ui.dialog() as proto_dlg, ui.card().classes(
+                        "w-full max-w-lg bg-slate-900 text-slate-100 p-4 border border-slate-700"
+                    ):
+                        ui.label(
+                            "✏️ Modifier Protocole"
+                            if is_edit
+                            else "➕ Ajouter un Protocole"
+                        ).classes("text-lg font-bold text-blue-400 mb-2")
+
+                        with ui.row().classes("w-full gap-2 items-center"):
+                            sel_niveau = ui.select(
+                                options=[
+                                    "S1",
+                                    "S2",
+                                    "S3",
+                                    "S4",
+                                    "T1",
+                                    "T2",
+                                    "T3",
+                                    "T4",
+                                ],
+                                value=p_data.get("niveau", "S2"),
+                                label="Posture",
+                            ).classes("w-1/3")
+
+                            in_titre = ui.input(
+                                label="Titre (ex: Visite VIP, Confinement DINUM)",
+                                value=p_data.get("titre", ""),
+                            ).classes("w-2/3")
+
+                        in_consignes = ui.textarea(
+                            label="Consignes spécifiques terrain (Markdown supporté)",
+                            value=p_data.get("consignes", ""),
+                        ).classes("w-full h-32 mt-2")
+
+                        async def save_proto():
+                            if not in_titre.value.strip():
+                                ui.notify("Le titre est obligatoire.", type="warning")
+                                return
+
+                            payload = {
+                                "site_code": site.code_site,
+                                "niveau": sel_niveau.value,
+                                "titre": in_titre.value,
+                                "consignes": in_consignes.value,
+                            }
+                            if is_edit:
+                                payload["id"] = p_data["id"]
+
+                            ok = await asyncio.to_thread(
+                                DatabaseService.save_site_protocol, payload
+                            )
+                            if ok:
+                                ui.notify("Protocole enregistré !", type="positive")
+                                proto_dlg.close()
+                                await refresh_protocols_list()
+                                await load_protocols_for_select()
+
+                        with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                            ui.button("Annuler", on_click=proto_dlg.close).props(
+                                "flat color=white"
+                            )
+                            ui.button(
+                                "Enregistrer", icon="save", on_click=save_proto
+                            ).props("color=blue")
+
+                    proto_dlg.open()
+
+                ui.button(
+                    "➕ Ajouter un protocole à ce site",
+                    on_click=lambda: open_protocol_editor(),
+                ).props("color=positive sm class='w-full mb-2'")
+
+                ui.timer(0.1, refresh_protocols_list, once=True)
+
+        # ----------------------------------------------------------------------
+        # 3. SÉCURITÉ POSTE DE GARDE : LIEN KIOSQUE SÉCURISÉ
+        # ----------------------------------------------------------------------
+        with ui.row().classes(
+            "w-full justify-between items-center bg-slate-800/90 p-3 rounded border border-slate-700 my-2"
+        ):
+            with ui.row().classes("items-center gap-2"):
+                ui.icon("screen_lock_portrait", color="blue-4", size="sm")
+                ui.label("URL Sécurisée Poste de Garde (24/7)").classes(
+                    "text-xs font-bold text-slate-200"
+                )
+
+            def open_kiosk_modal():
+                with ui.dialog() as dlg, ui.card().classes(
+                    "w-full max-w-lg bg-slate-900 border border-slate-700 text-slate-100 p-6"
+                ):
+                    ui.label(f"🔒 Accès Permanent — Poste {site.code_site}").classes(
+                        "text-lg font-bold text-blue-400 mb-2"
+                    )
+                    ui.label(
+                        "Configurez cette URL sur le navigateur de l'écran du poste de garde (mode Kiosque) :"
+                    ).classes("text-xs text-slate-400 mb-4")
+
+                    url_input = ui.input(
+                        label="URL d'accès sécurisée", value="Recherche du token..."
+                    ).classes("w-full font-mono text-xs mb-4")
+
+                    async def load_kiosk_url():
+                        generated_url = await asyncio.to_thread(
+                            DatabaseService.get_kiosk_url_for_site, site.code_site
+                        )
+                        url_input.value = generated_url
+
+                    def copy_to_clipboard():
+                        if url_input.value and "http" in url_input.value:
+                            ui.run_javascript(
+                                f'navigator.clipboard.writeText("{url_input.value}")'
+                            )
+                            ui.notify(
+                                f"📋 Lien sécurisé du poste {site.code_site} copié !",
+                                type="positive",
+                            )
+
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button("Fermer", on_click=dlg.close).props("flat color=grey")
+                        ui.button(
+                            "Copier l'URL",
+                            icon="content_copy",
+                            on_click=copy_to_clipboard,
+                        ).props("color=blue sm")
+
+                    ui.timer(0.01, load_kiosk_url, once=True)
+
+                dlg.open()
+
+            ui.button(
+                "Obtenir le lien Kiosque", icon="key", on_click=open_kiosk_modal
+            ).props("outline color=blue-4 sm")
+
+        # ----------------------------------------------------------------------
+        # 4. Suivi & Anomalies Enregistrées
+        # ----------------------------------------------------------------------
         ui.label("Historique & Maintenances Actives").classes(
             "text-lg font-bold text-amber-400 mt-2"
         )
@@ -236,7 +493,9 @@ def open_inspection_dialog(site: SiteCritique):
                 "text-sm text-slate-400 italic mb-4"
             )
 
-        # 4. Supprimer le site
+        # ----------------------------------------------------------------------
+        # 5. Supprimer le site
+        # ----------------------------------------------------------------------
         with ui.row().classes(
             "w-full justify-between items-center border-t border-slate-700 pt-4 mt-4"
         ):
@@ -277,29 +536,36 @@ def open_inspection_dialog(site: SiteCritique):
 
 async def create_cockpit_page():
     """Interface du Cockpit Central réorganisée par Onglets avec RBAC."""
-    user_role = app.storage.user.get("role", "ADMIN")
+    user_role = app.storage.user.get("role", "GUEST")
     is_sg_admin = user_role in ["ADMIN", "SUPERVISEUR_SG", "OPERATEUR_SG"]
 
-    # Header Global
+    # Header Global avec Versioning, Titre & Bouton Déconnexion
     with ui.header().classes(
         "bg-slate-900 text-white items-center justify-between px-6 py-2 border-b border-slate-700"
     ):
         with ui.row().classes("items-center gap-4"):
             with ui.row().classes("items-center gap-2"):
                 ui.icon("shield", size="md", color="red-5")
-                ui.label(settings.APP_NAME).classes(
+                ui.label(config.APP_NAME).classes(
                     "text-xl font-bold tracking-widest text-red-500"
                 )
                 ui.label("| SG").classes("text-xs text-slate-400 font-medium")
 
-            # Barre de navigation par Onglets
+                # Badge Version Officiel
+                ui.badge(config.DISPLAY_VERSION, color="slate-800").classes(
+                    "text-[10px] font-mono border border-slate-700 text-slate-300 px-2 py-0.5 ml-1"
+                )
+
+            # Navigation Onglets
             with ui.tabs().classes("text-white") as tabs:
                 tab_sites = ui.tab("Sites Sensibles", icon="grid_view")
                 if is_sg_admin:
                     tab_crises = ui.tab("Cellules de Crise", icon="warning")
                     tab_annuaire = ui.tab("Annuaire RH", icon="people")
+                    if user_role == "ADMIN":
+                        tab_users = ui.tab("Gestion Accès", icon="manage_accounts")
 
-        # Actions Globales à droite
+        # Actions Globales & Bouton de Déconnexion (Log Out)
         with ui.row().classes("items-center gap-3"):
             ui.button(
                 "RETOUR S1 GENERAL", icon="verified", on_click=handle_global_s1
@@ -310,6 +576,19 @@ async def create_cockpit_page():
             ).props("color=red font-bold animate-pulse sm")
 
             ui.badge("TEMPS RÉEL", color="positive")
+
+            def do_logout():
+                user_name = app.storage.user.get("nom_complet", "Utilisateur")
+                app.storage.user.clear()
+                ui.notify(f"Déconnexion réussie. À bientôt {user_name} !", type="info")
+                ui.navigate.to("/login")
+
+            ui.button(
+                icon="logout",
+                on_click=do_logout,
+            ).props(
+                "flat round color=red-4 sm"
+            ).tooltip("Se déconnecter du Cockpit")
 
     # Contenu Principal via Tab Panels
     with ui.tab_panels(tabs, value=tab_sites).classes(
@@ -342,7 +621,6 @@ async def create_cockpit_page():
 
             sites = await asyncio.to_thread(DatabaseService.get_all_sites) or []
 
-            # Grille Responsive (1 col mobile, 2 tablette, 4 grand écran)
             sites_grid = ui.grid().classes(
                 "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 w-full"
             )
@@ -427,28 +705,44 @@ async def create_cockpit_page():
                                     s_target
                                 )
                             )
-                            make_site_screen_handler = lambda code_target=site.code_site: lambda: ui.navigate.to(
-                                f"/site/{code_target}"
+
+                            async def open_site_kiosk_screen(site_code: str):
+                                url = await asyncio.to_thread(
+                                    DatabaseService.get_kiosk_url_for_site, site_code
+                                )
+                                if url:
+                                    ui.navigate.to(url, new_tab=True)
+                                else:
+                                    ui.notify(
+                                        f"❌ Jeton Kiosque introuvable pour {site_code}",
+                                        type="warning",
+                                    )
+
+                            make_site_screen_handler = lambda code_target=site.code_site: lambda: open_site_kiosk_screen(
+                                code_target
                             )
 
                             with ui.row().classes("w-full gap-2 mt-auto"):
                                 ui.button(
                                     "Gérer", on_click=make_manage_handler()
                                 ).props("sm outline color=grey-4").classes("w-1/2")
+
                                 ui.button(
                                     "Écran Site",
+                                    icon="open_in_new",
                                     on_click=make_site_screen_handler(),
-                                ).props("sm color=blue-7").classes("w-1/2")
+                                ).props("sm color=blue-7").classes("w-1/2").tooltip(
+                                    "Ouvrir l'écran de supervision Kiosque sécurisé"
+                                )
 
             search_input.on("update:model-value", lambda e: render_sites_grid(e.value))
             render_sites_grid()
 
         # ----------------------------------------------------------------------
-        # ONGLET 2 : CELLULES DE CRISE SG (ACCÈS RESTREINT RBAC)
+        # ONGLET 2 : CELLULES DE CRISE SG
         # ----------------------------------------------------------------------
         if is_sg_admin:
             with ui.tab_panel(tab_crises):
-                # 🟢 Appel avec await pour exécuter la coroutine de crises_ui
                 await crises_ui.render_crises_view(is_sg_admin=is_sg_admin)
 
         # ----------------------------------------------------------------------
@@ -457,3 +751,10 @@ async def create_cockpit_page():
         if is_sg_admin:
             with ui.tab_panel(tab_annuaire):
                 annuaire_ui.render_annuaire_view()
+
+        # ----------------------------------------------------------------------
+        # ONGLET 4 : GESTION DES ACCÈS & YUBIKEYS (ADMIN UNIQUEMENT)
+        # ----------------------------------------------------------------------
+        if user_role == "ADMIN":
+            with ui.tab_panel(tab_users):
+                users_ui.render_users_management_view()

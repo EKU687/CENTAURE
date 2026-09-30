@@ -1,43 +1,68 @@
-# 📄 RÉSUMÉ DE CONTEXTE — PROJET CENTAURE
+# 📌 Document de Contexte & Reprise de Session — CENTAURE
+
+**Projet :** Cockpit Central de Supervision CENTAURE (Gouvernement de la Nouvelle-Calédonie)  
+**Architecture :** Python 3.14 / NiceGUI / Supabase (PostgreSQL)  
+**Date d'actualisation :** 30 septembre 2026  
 
 ---
 
-## 1. Intention & Architecture du Projet
-* **Projet** : CENTAURE – Plateforme d'hypervision et de gestion de crise stratégique (SG).
-* **Tech Stack** :
-  * **Python** (3.11+)
-  * **NiceGUI** (FastAPI / Quasar / Tailwind, communication WebSockets)
-  * **Supabase** (PostgreSQL backend avec RLS)
-  * **SMTP via asyncio** pour les notifications d'urgence
-* **Architecture Backend (`app/services/database_service.py`)** : Couche d'accès aux données 100% stateless utilisant exclusivement le pattern `@staticmethod` (`DatabaseService.method()`). Tout le code IHM s'appuie sur cette norme.
-* **Architecture Async** : Encapsulation systématique des requêtes BDD dans `asyncio.to_thread()` pour éviter tout blocage de la boucle d'événements (*Event Loop*) et garantir la fluidité du rendu NiceGUI.
+## 1. Vue d'Ensemble & Progression de la Session
+
+L'objectif principal de cette session était d'intégrer le contrôle d'accès utilisateur (RBAC) et d'assurer une authentification matérielle fluide via **YubiKey** sur le Cockpit **CENTAURE**.
+
+### Réalisations majeures :
+1. **Module de Gestion des Accès (CRUD Users) :**
+   * Ajout de l'onglet `Gestion Accès` réservé au rôle `ADMIN`.
+   * Prise en charge de la création, modification et suppression des comptes utilisateurs dans Supabase.
+   * Gestion des rôles RBAC : `ADMIN`, `SUPERVISEUR_SG`, `OPERATEUR_SG`.
+
+2. **Authentification YubiKey Stabilisée (Mode OTP HID / Clé Publique) :**
+   * Abandon de l'API WebAuthn/FIDO2 standard (qui imposait la saisie/gestion de PIN matériels et les contraintes de domaine Windows Hello).
+   * Migration réussie vers l'écoute de la frappe clavier de la YubiKey (mode HID OTP / extraction des 12 premiers caractères de l'identifiant public).
+   * Sécurisation visuelle de la saisie (champs masqués par puces `password=True`) aussi bien sur la page de `/login` que dans la modale d'enrôlement.
+
+3. **Ergonomie & Session :**
+   * Intégration du bouton de déconnexion (`do_logout`) dans le Header du Cockpit (`app/ui/cockpit.py`).
+   * Nettoyage automatique de la session `app.storage.user` avec redirection vers `/login`.
 
 ---
 
-## 2. Réalisations & Acquis de la Session (Validation Phase 3 & Refactoring Async)
+## 2. Point Attention & Bug à Traiter en Priorité (Next Step)
 
-### ✉️ Service de Notification & SMTP
-* Alignement de `NotificationService` sur le pattern `@staticmethod`.
-* Correction du bug d'argument positionnel manquant (`membres`) lors de l'activation des cellules de crise.
-* Envoi asynchrone non-bloquant des convocations et alertes e-mail au format HTML.
-
-### ⚡ Refactoring Async & IHM NiceGUI
-* Résolution des avertissements Python `RuntimeWarning: coroutine was never awaited`.
-* Passage en `async / await` propre du composant de vue des crises (`render_crises_view`) et des pages principales (`create_cockpit_page` dans `cockpit.py` et `@ui.page('/') async def dashboard_page()` dans `main.py`).
-
-### 📦 Gestion de Version & Git
-* Initialisation du dépôt Git local (`git init`).
-* Configuration du fichier `.gitignore` pour exclure l'environnement virtuel (`.venv/`) et protéger les clés d'API / identifiants sensibles du fichier `.env`.
-* Création du commit de sauvegarde initial.
+⚠️ **Anomalie identifiée en fin de session :**
+* **Problème :** Les protocoles associés aux sites sensibles n'apparaissent plus correctement dans les fiches ou les sélecteurs de posture.
+* **Action pour la prochaine session :** Inspecter les requêtes BDD `DatabaseService.get_site_protocols()` et vérifier le rendu dynamique dans la modale d'inspection de `app/ui/cockpit.py`.
 
 ---
 
-## 3. Prochaine Étape (Phase 4 — À attaquer lors de la prochaine session)
+## 3. État Technique du Code Base
 
-* **Vue Hypervision des Sites Critiques (`sites_ui.py` / `cockpit.py`)** :
-  * Finalisation du suivi dynamique et réactif des postures Sûreté (**S1 à S4**) et Technique (**T1 à T4**).
-  * Optimisation du rendu visuel de la grille responsive sous Tailwind / Quasar.
-* **Procédure d'Alerte Générale S4 (Bouton Rouge)** :
-  * Déclenchement du confinement massif **S4** sur l'ensemble des sites avec sirène/alerte visuelle dans l'IHM.
-  * Consignation automatique de l'événement dans la Main Courante Supabase.
-  * Module d'acquittement en temps réel pour les agents terrain via la route dédiée `/site/{code_site}`.
+### A. Modèle BDD Supabase (`centaure_yubikeys`)
+```sql
+CREATE TABLE IF NOT EXISTS centaure_yubikeys (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES centaure_users(id) ON DELETE CASCADE,
+    credential_id TEXT UNIQUE NOT NULL, -- Stocke les 12 premiers caractères (Clé Publique)
+    public_key TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+### B. Méthodes Clés (`DatabaseService`)
+* `get_all_users()` / `save_user()` / `delete_user()` : Administration des comptes.
+* `save_yubikey_public_id(user_id, public_id)` : Enregistrement de l'empreinte matérielle à 12 caractères.
+* `authenticate_by_yubikey(yubi_raw_input)` : Vérification et connexion instantanée par YubiKey.
+* `get_site_protocols(site_code)` : *(À corriger lors de la prochaine session)*.
+
+### C. Fichiers Mis à Jour
+* `app/ui/login_ui.py` : Écran de connexion hybride (Pass/YubiKey) avec champs masqués.
+* `app/ui/users_ui.py` : Vue d'administration et modale d'association YubiKey.
+* `app/ui/cockpit.py` : Hypervision principale, header avec logout et onglet d'administration conditionnel.
+
+---
+
+## 4. Programme de la Prochaine Session
+
+1. **Correction du bug des Protocoles Sites :** Diagnostiquer et corriger l'affichage des protocoles associés aux sites sensibles.
+2. **Audit / Logs de Sécurité :** Traçabilité des actions sensibles et connexions YubiKey.
+3. **Revue de Code & Finalisation :** Vérification globale avant le déploiement sur l'infrastructure du Gouvernement.

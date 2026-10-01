@@ -450,10 +450,17 @@ def open_inspection_dialog(site: SiteCritique):
                     ).classes("w-full font-mono text-xs mb-4")
 
                     async def load_kiosk_url():
-                        generated_url = await asyncio.to_thread(
-                            DatabaseService.get_kiosk_url_for_site, site.code_site
-                        )
-                        url_input.value = generated_url
+                        try:
+                            generated_url = await asyncio.to_thread(
+                                DatabaseService.get_kiosk_url_for_site, site.code_site
+                            )
+                            url_input.value = generated_url or "Erreur de génération"
+                        except Exception as err:
+                            print(f"❌ Erreur load_kiosk_url : {err}")
+                            url_input.value = "Erreur de connexion BDD"
+            
+                        # Force le rafraîchissement du composant NiceGUI
+                        url_input.update()
 
                     def copy_to_clipboard():
                         if url_input.value and "http" in url_input.value:
@@ -464,6 +471,8 @@ def open_inspection_dialog(site: SiteCritique):
                                 f"📋 Lien sécurisé du poste {site.code_site} copié !",
                                 type="positive",
                             )
+                        else:
+                            ui.notify("L'URL n'est pas encore prête.", type="warning")
 
                     with ui.row().classes("w-full justify-end gap-2"):
                         ui.button("Fermer", on_click=dlg.close).props("flat color=grey")
@@ -473,9 +482,10 @@ def open_inspection_dialog(site: SiteCritique):
                             on_click=copy_to_clipboard,
                         ).props("color=blue sm")
 
-                    ui.timer(0.01, load_kiosk_url, once=True)
+                        # Exécution immédiate du chargement
+                    ui.timer(0.1, load_kiosk_url, once=True)
 
-                dlg.open()
+                dlg.open())
 
             ui.button(
                 "Obtenir le lien Kiosque", icon="key", on_click=open_kiosk_modal

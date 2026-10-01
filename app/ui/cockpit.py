@@ -145,21 +145,42 @@ def open_inspection_dialog(site: SiteCritique):
                 protocols = await asyncio.to_thread(
                     DatabaseService.get_site_protocols, site.code_site
                 )
+
+                # Récupération sécurisée du protocole actif sur le modèle Pydantic
+                active_proto_id = getattr(
+                    site, "active_protocol_id", getattr(site, "protocol_id", None)
+                )
+
+                # 1. Tenter un filtrage par niveau Sûreté ou Technique
                 filtered = {
                     p["id"]: f"[{p['niveau']}] {p['titre']}"
                     for p in protocols
-                    if p["niveau"] == select_s.value
+                    if p.get("niveau") in [select_s.value, select_t.value]
                 }
+
+                # 2. Si aucun protocole spécifique ne filtre, proposer tous les protocoles du site
+                if not filtered and protocols:
+                    filtered = {
+                        p["id"]: f"[{p['niveau']}] {p['titre']}" for p in protocols
+                    }
+
                 select_protocol.options = filtered
+
                 if filtered:
-                    if site.active_protocol_id in filtered:
-                        select_protocol.value = site.active_protocol_id
+                    if active_proto_id and active_proto_id in filtered:
+                        select_protocol.value = active_proto_id
                     else:
                         select_protocol.value = list(filtered.keys())[0]
                 else:
                     select_protocol.value = None
 
-            select_s.on("update:model-value", lambda: load_protocols_for_select())
+                select_protocol.update()
+
+            # Mise à jour réactive des options lors du changement de posture S ou T
+            select_s.on_value_change(lambda: load_protocols_for_select())
+            select_t.on_value_change(lambda: load_protocols_for_select())
+
+            # Chargement initial des protocoles
             ui.timer(0.1, load_protocols_for_select, once=True)
 
             input_motif = ui.input(
@@ -235,6 +256,10 @@ def open_inspection_dialog(site: SiteCritique):
                         DatabaseService.get_site_protocols, site.code_site
                     )
 
+                    active_proto_id = getattr(
+                        site, "active_protocol_id", getattr(site, "protocol_id", None)
+                    )
+
                     with protocols_container:
                         if not current_protocols:
                             ui.label(
@@ -243,7 +268,9 @@ def open_inspection_dialog(site: SiteCritique):
 
                         for proto in current_protocols:
                             badge_color = get_status_color(proto.get("niveau", "S1"))
-                            is_active = proto.get("id") == site.active_protocol_id
+                            is_active = active_proto_id and (
+                                proto.get("id") == active_proto_id
+                            )
                             card_border = (
                                 "border-2 border-emerald-500/80 shadow-emerald-500/10"
                                 if is_active

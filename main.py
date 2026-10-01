@@ -16,6 +16,13 @@ from app.ui.cockpit import create_cockpit_page
 from app.ui.site_agent import create_site_page
 from app.ui.login_ui import render_login_page
 
+# ----------------------------------------------------------------------
+# Configuration de l'environnement (DEV vs PROD)
+# ----------------------------------------------------------------------
+ENVIRONMENT = os.getenv("APP_ENV", os.getenv("ENV", "development")).lower()
+IS_PROD = ENVIRONMENT in ["production", "prod"]
+PORT = int(os.getenv("PORT", 8080))
+
 
 # ----------------------------------------------------------------------
 # Route 0 : Authentification Cockpit Central ( /login )
@@ -105,7 +112,7 @@ async def site_agent_page(code_site: str):
                 "text-2xl font-black text-red-500 tracking-wider mt-4"
             )
             ui.label(
-                f"L'accès direct à l'URL /site/{code_site} est strictement interdit."
+                f"L'accès direct à l'URL /site/{code_site} est strictly interdit."
             ).classes("text-slate-300 text-sm mt-2")
             ui.label(
                 "Ce poste de garde doit utiliser son URL Kiosque dédiée munie d'un jeton d'accès."
@@ -115,11 +122,18 @@ async def site_agent_page(code_site: str):
     create_site_page(code_site)
 
 
-# Lancement du serveur sur le réseau local
-ui.run(
-    title=f"{config.APP_NAME} - Cockpit",
-    storage_secret=config.SECRET_KEY,
-    host="0.0.0.0",
-    dark=True,
-    port=8080,
-)
+# ----------------------------------------------------------------------
+# Démarrage de l'Application NiceGUI
+# ----------------------------------------------------------------------
+if __name__ in {"__main__", "__mp_main__"}:
+    print(f"🚀 CENTAURE Démarré | Mode: {ENVIRONMENT.upper()} | Port: {PORT}")
+
+    ui.run(
+        title=f"{config.APP_NAME} - Cockpit Central",
+        storage_secret=config.SECRET_KEY,
+        host="0.0.0.0",
+        port=PORT,
+        dark=True,
+        reload=not IS_PROD,  # True en DEV, False en PROD (désactive watchfiles)
+        show=not IS_PROD,  # True en DEV, False en PROD (empèche l'ouverture du navigateur serveur)
+    )

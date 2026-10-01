@@ -663,12 +663,15 @@ class DatabaseService:
             return None
 
     @staticmethod
-    def get_kiosk_url_for_site(
-        code_site: str, base_url: str = "http://localhost:8080"
-    ) -> str:
+    @staticmethod
+    def get_kiosk_url_for_site(code_site: str, base_url: str = None) -> str:
         """
         Génère ou récupère l'URL d'accès permanent sécurisée (Kiosque) pour le poste de garde.
         """
+        # Si aucune base_url n'est passée en paramètre, on lit APP_URL dans le .env
+        if not base_url:
+            base_url = os.getenv("APP_URL", "http://localhost:8080")
+
         clean_code = str(code_site).strip()
         try:
             # 1. Requête Supabase avec filtre insensible à la casse (ilike)

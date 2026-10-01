@@ -451,13 +451,19 @@ def open_inspection_dialog(site: SiteCritique):
 
                     async def load_kiosk_url():
                         try:
+                            # Récupération sécurisée du code site (supporte site.code_site ou site.code)
+                            target_code = getattr(
+                                site, "code_site", getattr(site, "code", str(site))
+                            )
+
                             generated_url = await asyncio.to_thread(
-                                DatabaseService.get_kiosk_url_for_site, site.code_site
+                                DatabaseService.get_kiosk_url_for_site, target_code
                             )
                             url_input.value = generated_url or "Erreur de génération"
                         except Exception as err:
-                            print(f"❌ Erreur load_kiosk_url : {err}")
-                            url_input.value = "Erreur de connexion BDD"
+                            print(f"❌ [DEBUG KIOSK MODAL] Erreur : {err}")
+                            # Affiche l'erreur exacte dans le champ pour diagnostic immédiat
+                            url_input.value = f"Erreur: {err}"
 
                         url_input.update()
 

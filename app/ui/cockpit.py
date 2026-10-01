@@ -458,8 +458,7 @@ def open_inspection_dialog(site: SiteCritique):
                         except Exception as err:
                             print(f"❌ Erreur load_kiosk_url : {err}")
                             url_input.value = "Erreur de connexion BDD"
-            
-                        # Force le rafraîchissement du composant NiceGUI
+
                         url_input.update()
 
                     def copy_to_clipboard():
@@ -482,10 +481,10 @@ def open_inspection_dialog(site: SiteCritique):
                             on_click=copy_to_clipboard,
                         ).props("color=blue sm")
 
-                        # Exécution immédiate du chargement
-                    ui.timer(0.1, load_kiosk_url, once=True)
-
-                dlg.open())
+                # 1. Ouvrir la modale d'abord dans le navigateur
+                dlg.open()
+                # 2. Lancer immédiatement le chargement de l'URL
+                asyncio.create_task(load_kiosk_url())
 
             ui.button(
                 "Obtenir le lien Kiosque", icon="key", on_click=open_kiosk_modal

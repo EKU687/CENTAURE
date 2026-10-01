@@ -1,3 +1,5 @@
+import os
+import uuid
 import asyncio
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
@@ -570,7 +572,7 @@ class DatabaseService:
             )
             return res.data or []
         except Exception as e:
-            print(f"⚠️ Erreur membres crise : {e}")
+            print(f"⚠️️ Erreur membres crise : {e}")
             return []
 
     @staticmethod
@@ -608,7 +610,6 @@ class DatabaseService:
         ou à défaut le premier protocole correspondant au niveau de sûreté actuel.
         """
         try:
-            # 1. Récupérer le site avec son niveau et son active_protocol_id
             res_site = (
                 supabase.table("centaure_sites")
                 .select("surete_niveau, active_protocol_id")
@@ -622,7 +623,6 @@ class DatabaseService:
             active_proto_id = site_data.get("active_protocol_id")
             current_s = site_data.get("surete_niveau")
 
-            # 2. Si un protocole spécifique est ciblé via active_protocol_id
             if active_proto_id:
                 res_proto = (
                     supabase.table("centaure_site_protocols")
@@ -633,7 +633,6 @@ class DatabaseService:
                 if res_proto.data:
                     return res_proto.data[0]
 
-            # 3. Fallback : Prendre le premier protocole du site qui correspond au niveau S actuel
             res_fallback = (
                 supabase.table("centaure_site_protocols")
                 .select("*")
@@ -663,18 +662,16 @@ class DatabaseService:
             return None
 
     @staticmethod
-    @staticmethod
     def get_kiosk_url_for_site(code_site: str, base_url: str = None) -> str:
         """
-        Génère ou récupère l'URL d'accès permanent sécurisée (Kiosque) pour le poste de garde.
+        Génère ou récupère l'URL Kiosque sécurisée.
         """
-        # Si aucune base_url n'est passée en paramètre, on lit APP_URL dans le .env
         if not base_url:
             base_url = os.getenv("APP_URL", "http://localhost:8080")
 
-        clean_code = str(code_site).strip()
+        clean_code = str(code_site).strip() if code_site else ""
+
         try:
-            # 1. Requête Supabase avec filtre insensible à la casse (ilike)
             res = (
                 supabase.table("centaure_sites")
                 .select("id, code_site, kiosk_token")
@@ -682,34 +679,26 @@ class DatabaseService:
                 .execute()
             )
 
-            print(
-                f"🔍 [DEBUG KIOSK] Recherche site '{clean_code}' -> Résultat BDD : {res.data}"
-            )
-
-            if res.data:
+            if res and res.data:
                 site_record = res.data[0]
                 token = site_record.get("kiosk_token")
 
-                # 2. Si le token est NULL, on génère un UUID à la volée et on le sauvegarde
                 if not token:
-                    import uuid
-
-                    new_token = str(uuid.uuid4())
-                    supabase.table("centaure_sites").update(
-                        {"kiosk_token": new_token}
-                    ).eq("id", site_record["id"]).execute()
-                    token = new_token
+                    token = str(uuid.uuid4())
+                    supabase.table("centaure_sites").update({"kiosk_token": token}).eq(
+                        "id", site_record["id"]
+                    ).execute()
 
                 return f"{base_url.rstrip('/')}/kiosk?token={token}"
 
             print(
-                f"⚠️ [DEBUG KIOSK] Aucun site trouvé dans Supabase pour le code : '{clean_code}'"
+                f"⚠️ [DEBUG KIOSK] Aucun site trouvé dans Supabase pour : '{clean_code}'"
             )
-            return f"{base_url.rstrip('/')}/kiosk?token=site-non-trouve-{clean_code}"
+            return f"{base_url.rstrip('/')}/kiosk?token=site-introuvable-{clean_code}"
 
         except Exception as e:
             print(f"❌ [DEBUG KIOSK] Erreur Supabase pour ({clean_code}) : {e}")
-            return f"{base_url.rstrip('/')}/kiosk?token=erreur-connexion"
+            return f"{base_url.rstrip('/')}/kiosk?token=erreur-bdd"
 
     @staticmethod
     def authenticate_user(username: str, password_plain: str) -> Optional[dict]:
@@ -723,7 +712,6 @@ class DatabaseService:
             )
             if res.data:
                 user = res.data[0]
-                # Comparaison directe (ou vérification de hash bcrypt)
                 if user.get("password_hash") == password_plain:
                     return {
                         "id": user["id"],
@@ -782,7 +770,7 @@ class DatabaseService:
             payload = {
                 "user_id": user_id,
                 "credential_id": credential_id,
-                "public_key": "stored_fido2_key",  # Empreinte de clé
+                "public_key": "stored_fido2_key",
             }
             supabase.table("centaure_yubikeys").insert(payload).execute()
             print(f"✅ [YUBIKEY] Clé FIDO2 enregistrée pour l'utilisateur {user_id}")
@@ -797,9 +785,7 @@ class DatabaseService:
         try:
             payload = {
                 "user_id": user_id,
-                "credential_id": public_id[
-                    :12
-                ],  # Extrait les 12 caractères de la clé publique
+                "credential_id": public_id[:12],
                 "public_key": "yubikey_otp_public",
             }
             supabase.table("centaure_yubikeys").insert(payload).execute()
@@ -821,7 +807,6 @@ class DatabaseService:
             public_id = yubi_raw_input.strip()[:12]
             print(f"🔑 [YUBIKEY LOGIN] Clé Publique soumise : {public_id}")
 
-            # Recherche dans centaure_yubikeys
             res = (
                 supabase.table("centaure_yubikeys")
                 .select("user_id, centaure_users(id, username, nom_complet, role)")
@@ -837,7 +822,7 @@ class DatabaseService:
                     )
                     return user_info
 
-            print(f"⚠️️ [YUBIKEY LOGIN] Clé {public_id} inconnue en base de données.")
+            print(f"⚠ [YUBIKEY LOGIN] Clé {public_id} inconnue en base de données.")
             return None
         except Exception as e:
             print(f"❌ Erreur lors de l'authentification YubiKey : {e}")

@@ -3,12 +3,20 @@
 # ==========================================
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 .streamlit/
+.nicegui/
 
 # ==========================================
-# 2. PYTHON & CACHE
+# 2. LOGS & BUILDS FLY.IO / DOCKER
+# ==========================================
+*.log
+fly.log
+
+# ==========================================
+# 3. PYTHON & CACHE
 # ==========================================
 __pycache__/
 *.py[cod]
@@ -18,7 +26,7 @@ __pycache__/
 htmlcov/
 
 # ==========================================
-# 3. ENVIRONNEMENTS VIRTUELS
+# 4. ENVIRONNEMENTS VIRTUELS
 # ==========================================
 .venv/
 venv/
@@ -28,7 +36,7 @@ env.bak/
 venv.bak/
 
 # ==========================================
-# 4. CONFIGURATIONS IDE & ÉDITEURS
+# 5. CONFIGURATIONS IDE & ÉDITEURS
 # ==========================================
 .vscode/
 .idea/
@@ -36,7 +44,7 @@ venv.bak/
 *.swo
 
 # ==========================================
-# 5. FICHIERS PARASITES SYSTÈME (OS)
+# 6. FICHIERS PARASITES SYSTÈME (OS)
 # ==========================================
 .DS_Store
 .DS_Store?
@@ -46,3 +54,7 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 desktop.ini
+# Artefacts et tests locaux
+*.pdf
+Test_brevo.py
+test_token.py

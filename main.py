@@ -4,7 +4,8 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()  # Charge le fichier .env dès le démarrage
+# Charge le fichier .env dès le démarrage
+load_dotenv()
 
 # Ingestion du chemin racine pour le routage de modules Python
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -22,6 +23,11 @@ from app.ui.login_ui import render_login_page
 ENVIRONMENT = os.getenv("APP_ENV", os.getenv("ENV", "development")).lower()
 IS_PROD = ENVIRONMENT in ["production", "prod"]
 PORT = int(os.getenv("PORT", 8080))
+
+# Fallback de sécurité si SECRET_KEY est absente de la config
+SECRET_KEY = getattr(config, "SECRET_KEY", None) or os.getenv(
+    "SECRET_KEY", "centaure_secret_session_key_2026"
+)
 
 
 # ----------------------------------------------------------------------
@@ -48,45 +54,63 @@ async def dashboard_page():
 
 # ----------------------------------------------------------------------
 # Route 2 : Postes de Supervision Locaux Kiosque ( Permanent 24/7 )
-# URL sur écran de garde : /kiosk?token=a8f3b12d-90e4-4c11-b823-1d2e3f4a5b6c
+# URL sur écran de garde : /kiosk?token=c7c18717-1611-4ee2-a3e0-fb7192bcec0b
 # ----------------------------------------------------------------------
 @ui.page("/kiosk")
-async def kiosk_page(token: str = None):
-    """Accès permanent sécurisé par jeton d'appareil (Kiosque 24/7)."""
-    if not token:
+async def kiosk_page(token: str = ""):
+    """Valide le jeton UUID Supabase, initialise la session client et charge le Poste de Garde."""
+    clean_token = str(token).strip() if token else ""
+
+    # Rejet immédiat si jeton absent ou anomalie textuelle évidente
+    if not clean_token or any(
+        err in clean_token.lower() for err in ["erreur", "introuvable", "none", "null"]
+    ):
         with ui.column().classes(
             "w-full h-screen items-center justify-center bg-slate-950 text-red-500 p-8 text-center"
         ):
-            ui.icon("block", size="xl", color="red-5")
-            ui.label("⛔ ACCÈS REFUSÉ").classes(
-                "text-3xl font-black tracking-widest mt-4"
+            ui.icon("screen_lock_portrait", size="xl", color="red-5")
+            ui.label("ACCÈS KIOSQUE REFUSÉ").classes(
+                "text-2xl font-black text-red-500 tracking-wider mt-4"
             )
-            ui.label("Jeton d'accès poste (token) manquant dans l'URL.").classes(
-                "text-slate-400 text-sm mt-2"
+            ui.label("Jeton d'accès manquant ou format invalide.").classes(
+                "text-slate-300 text-sm mt-2"
             )
         return
 
-    # Vérification du jeton dans la BDD Supabase
-    site_data = await asyncio.to_thread(DatabaseService.get_site_by_kiosk_token, token)
+    # Validation du jeton via la méthode dédiée du DatabaseService
+    try:
+        site_data = await asyncio.to_thread(
+            DatabaseService.get_site_by_kiosk_token, clean_token
+        )
+    except Exception as e:
+        print(f"❌ Erreur lors de la validation du token Kiosque : {e}")
+        site_data = None
 
+    # Jeton non trouvé dans Supabase
     if not site_data:
         with ui.column().classes(
-            "w-full h-screen items-center justify-center bg-slate-950 text-red-500 p-8 text-center"
+            "w-full h-screen items-center justify-center bg-slate-950 text-amber-500 p-8 text-center"
         ):
-            ui.icon("gavel", size="xl", color="red-5")
-            ui.label("⛔ JETON INVALIDE OU RÉVOQUÉ").classes(
-                "text-3xl font-black tracking-widest mt-4"
+            ui.icon("no_accounts", size="xl", color="amber-5")
+            ui.label("JETON INCONNU OU EXPIRÉ").classes(
+                "text-2xl font-black text-amber-500 tracking-wider mt-4"
             )
-            ui.label("Ce poste n'est pas autorisé sur le réseau CENTAURE.").classes(
-                "text-slate-400 text-sm mt-2"
-            )
+            ui.label(
+                "Ce jeton Kiosque n'est pas reconnu par le serveur Supabase."
+            ).classes("text-slate-300 text-sm mt-2")
         return
 
-    # Enregistre le code site attribué dans le stockage du navigateur client
-    app.storage.client["kiosk_site_code"] = site_data["code_site"]
+    site_code = site_data.get("code_site")
+    if not site_code:
+        ui.notify("Erreur d'intégrité : code site manquant.", type="negative")
+        return
 
-    # Rendu sécurisé de la vue terrain
-    create_site_page(site_data["code_site"])
+    # 🔑 AUTORISATION : Sauvegarde dans le stockage client de l'onglet/navigateur
+    app.storage.client["kiosk_site_code"] = site_code.upper()
+    print(f"✅ Accès Kiosque accordé pour le site : {site_code}")
+
+    # Rendu direct de l'interface Poste de Garde pour le site validé
+    create_site_page(site_code)
 
 
 # ----------------------------------------------------------------------
@@ -94,13 +118,13 @@ async def kiosk_page(token: str = None):
 # ----------------------------------------------------------------------
 @ui.page("/site/{code_site}")
 async def site_agent_page(code_site: str):
+    """Interdit l'accès direct par URL sauf pour Admin SG ou Kiosque validé."""
     user_role = app.storage.user.get("role", "GUEST")
     is_sg_admin = user_role in ["ADMIN", "SUPERVISEUR_SG", "OPERATEUR_SG"]
 
-    # Vérification si le navigateur a validé un token Kiosque préalable
+    # Vérification si le navigateur possède le jeton validé pour CE site
     assigned_kiosk_site = app.storage.client.get("kiosk_site_code")
 
-    # Si ce n'est PAS un Admin/Opérateur SG authentifié ET que le site ne correspond PAS au token kiosque
     if not is_sg_admin and (
         not assigned_kiosk_site or assigned_kiosk_site.upper() != code_site.upper()
     ):
@@ -108,11 +132,11 @@ async def site_agent_page(code_site: str):
             "w-full h-screen items-center justify-center bg-slate-950 text-red-500 p-8 text-center"
         ):
             ui.icon("shield", size="xl", color="red-5")
-            ui.label("⛔ SÉCURITÉ CENTAURE : ACCÈS REFUSÉ").classes(
+            ui.label("ERROR: SÉCURITÉ CENTAURE : ACCÈS REFUSÉ").classes(
                 "text-2xl font-black text-red-500 tracking-wider mt-4"
             )
             ui.label(
-                f"L'accès direct à l'URL /site/{code_site} est strictly interdit."
+                f"L'accès direct à l'URL /site/{code_site} est strictement interdit."
             ).classes("text-slate-300 text-sm mt-2")
             ui.label(
                 "Ce poste de garde doit utiliser son URL Kiosque dédiée munie d'un jeton d'accès."
@@ -126,14 +150,15 @@ async def site_agent_page(code_site: str):
 # Démarrage de l'Application NiceGUI
 # ----------------------------------------------------------------------
 if __name__ in {"__main__", "__mp_main__"}:
-    print(f"🚀 CENTAURE Démarré | Mode: {ENVIRONMENT.upper()} | Port: {PORT}")
+    print(f"CENTAURE Démarré | Mode: {ENVIRONMENT.upper()} | Port: {PORT}")
 
+    app_name = getattr(config, "APP_NAME", "CENTAURE")
     ui.run(
-        title=f"{config.APP_NAME} - Cockpit Central",
-        storage_secret=config.SECRET_KEY,
+        title=f"{app_name} - Cockpit Central",
+        storage_secret=SECRET_KEY,
         host="0.0.0.0",
         port=PORT,
         dark=True,
-        reload=not IS_PROD,  # True en DEV, False en PROD (désactive watchfiles)
-        show=not IS_PROD,  # True en DEV, False en PROD (empèche l'ouverture du navigateur serveur)
+        reload=not IS_PROD,  # True en DEV, False en PROD
+        show=not IS_PROD,  # True en DEV, False en PROD
     )

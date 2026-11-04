@@ -1,24 +1,20 @@
 import asyncio
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from zoneinfo import ZoneInfo
 
 from nicegui import app, ui
 from app.services.database_service import DatabaseService
 from app.services.notification_service import NotificationService
-from app.services.export_service import ExportService
+
+LOCAL_TZ = ZoneInfo("Pacific/Noumea")
 
 
 def generate_default_code_crise() -> str:
     """Génère un code de crise unique au format CRISE-YYYY-XXXX."""
-    year = datetime.now().year
+    year = datetime.now(LOCAL_TZ).year
     suffix = uuid.uuid4().hex[:4].upper()
     return f"CRISE-{year}-{suffix}"
-
-
-# =========================================================================
-# 🔄 CALLBACKS & ALERTES ASYNCHRONES
-# =========================================================================
 
 
 async def activer_et_notifier_crise(
@@ -28,7 +24,6 @@ async def activer_et_notifier_crise(
     try:
         ui.notify(f"Activation de la crise {code_crise}...", type="info")
 
-        # 1. Mise à jour statut BDD
         ok_update = await asyncio.to_thread(
             DatabaseService.update_crise, crise_id=crise_id, statut="ACTIVEE"
         )
@@ -37,7 +32,6 @@ async def activer_et_notifier_crise(
             ui.notify("❌ Échec de la mise à jour du statut en BDD.", type="negative")
             return
 
-        # 2. Main Courante
         await asyncio.to_thread(
             DatabaseService.consigner_main_courante,
             crise_id=crise_id,
@@ -49,7 +43,6 @@ async def activer_et_notifier_crise(
 
         ui.notify("✅ Crise ACTIVÉE et journalisée.", type="positive")
 
-        # 3. Récupération des données et membres
         crise_data = await asyncio.to_thread(DatabaseService.get_crise_by_id, crise_id)
         if not crise_data:
             crise_data = {
@@ -75,7 +68,6 @@ async def activer_et_notifier_crise(
                     }
                 )
 
-        # 4. Notification SMTP Statique
         if membres_formatted:
             report = await NotificationService.notify_crise_activation(
                 crise_data=crise_data, membres=membres_formatted
@@ -99,315 +91,6 @@ async def activer_et_notifier_crise(
     except Exception as e:
         print(f"❌ Erreur activation : {e}")
         ui.notify(f"Erreur traitement : {e}", type="negative")
-
-
-# =========================================================================
-# 💬 DIALOG : MAIN COURANTE DE CRISE
-# =========================================================================
-
-
-async def open_main_courante_dialog(crise):
-    """Journal de bord avec rendu réactif garanti par @ui.refreshable."""
-    crise_id = None
-    if isinstance(crise, str):
-        crise_id = crise
-    elif isinstance(crise, dict):
-        crise_id = crise.get("id") or crise.get("crise_id")
-    else:
-        crise_id = getattr(crise, "id", None) or getattr(crise, "crise_id", None)
-
-    code_crise = str(
-        getattr(crise, "code_crise", None)
-        or (crise.get("code_crise") if isinstance(crise, dict) else "CRISE")
-    )
-    titre_crise = str(
-        getattr(crise, "titre", None)
-        or (crise.get("titre") if isinstance(crise, dict) else "Sans titre")
-    )
-
-    if not crise_id or str(crise_id).strip() in ["", "None"]:
-        ui.notify(
-            "❌ Impossible d'identifier la crise (UUID manquant).", type="negative"
-        )
-        return
-
-    directions_db = await asyncio.to_thread(DatabaseService.get_all_directions) or []
-    options_directions = ["TOUTES / GÉNÉRAL"] + directions_db
-
-    with ui.dialog() as dialog, ui.card().classes(
-        "w-full max-w-5xl bg-slate-900 border border-red-800 text-slate-100 p-6 h-[85vh] flex flex-col justify-start gap-4 overflow-hidden"
-    ):
-        # 1. En-tête
-        with ui.row().classes(
-            "justify-between items-center w-full border-b border-red-900/60 pb-3 flex-none"
-        ):
-            with ui.row().classes("items-center gap-3"):
-                ui.icon("assignment", color="red-5", size="md")
-                with ui.column().classes("gap-0"):
-                    ui.label(f"MAIN COURANTE — {code_crise}").classes(
-                        "text-xl font-black text-red-400"
-                    )
-                    ui.label(f"Objet : {titre_crise}").classes("text-xs text-slate-300")
-            ui.button(icon="close", on_click=dialog.close).props("flat round dense")
-
-        # 2. Formulaire de consignation
-        with ui.column().classes(
-            "w-full bg-slate-800/90 p-3 rounded border border-slate-700 flex-none gap-3"
-        ):
-            ui.label("Consigner une directive ou un événement au journal").classes(
-                "text-xs font-bold text-slate-300 tracking-wider"
-            )
-
-            with ui.row().classes("w-full gap-3 items-center flex-wrap"):
-                select_cat = ui.select(
-                    options=["INFORMATION", "ORDRE", "DECISION", "ALERTE", "SITUATION"],
-                    value="INFORMATION",
-                    label="Catégorie",
-                ).classes("w-36 bg-slate-900 text-white dense")
-
-                select_prio = ui.select(
-                    options=["NORMALE", "URGENT", "CRITIQUE"],
-                    value="NORMALE",
-                    label="Priorité",
-                ).classes("w-32 bg-slate-900 text-white dense")
-
-                select_direction = ui.select(
-                    options=options_directions,
-                    value="TOUTES / GÉNÉRAL",
-                    label="Assigner à Direction",
-                ).classes("w-48 bg-slate-900 text-white dense")
-
-                select_statut_info = ui.select(
-                    options={
-                        "CONFIRMEE": "🟢 CONFIRMÉE",
-                        "A_VERIFIER": "🟡 À VÉRIFIER",
-                        "INVALIDEE": "🔴 INVALIDÉE",
-                    },
-                    value="CONFIRMEE",
-                    label="Qualification",
-                ).classes("w-40 bg-slate-900 text-white dense")
-
-            with ui.row().classes("w-full gap-3 items-end"):
-                input_desc = (
-                    ui.textarea(
-                        label="Description de l'événement / Consigne *",
-                        placeholder="Saisir la description détaillée ici...",
-                    )
-                    .props("rows=2")
-                    .classes("flex-grow bg-slate-900 text-white text-sm")
-                )
-
-                btn_send = (
-                    ui.button("CONSIGNER", icon="send")
-                    .props("color=red font-bold")
-                    .classes("h-12 px-5")
-                )
-
-        # 3. Barre de filtres & Export CSV
-        with ui.row().classes(
-            "w-full items-center justify-between gap-2 bg-slate-950/60 p-2 rounded border border-slate-800 flex-none"
-        ):
-            search_input = ui.input(
-                placeholder="🔍 Rechercher dans les logs..."
-            ).classes("w-1/4 bg-slate-900 text-white dense")
-
-            filter_cat = ui.select(
-                options=[
-                    "TOUS",
-                    "INFORMATION",
-                    "ORDRE",
-                    "DECISION",
-                    "ALERTE",
-                    "SITUATION",
-                ],
-                value="TOUS",
-                label="Catégorie",
-            ).classes("w-32 bg-slate-900 text-white dense")
-
-            filter_dir = ui.select(
-                options=["TOUTES"] + directions_db,
-                value="TOUTES",
-                label="Direction",
-            ).classes("w-36 bg-slate-900 text-white dense")
-
-            filter_statut = ui.select(
-                options=["TOUS", "CONFIRMEE", "A_VERIFIER", "INVALIDEE"],
-                value="TOUS",
-                label="Statut Info",
-            ).classes("w-32 bg-slate-900 text-white dense")
-
-            async def trigger_export():
-                logs = (
-                    await asyncio.to_thread(
-                        DatabaseService.get_main_courante_by_crise, crise_id
-                    )
-                    or []
-                )
-                if not logs:
-                    ui.notify("Aucun événement à exporter.", type="warning")
-                    return
-                csv_bytes = ExportService.exporter_csv_main_courante(logs)
-                ui.download(csv_bytes, filename=f"MainCourante_{code_crise}.csv")
-                ui.notify("📜 Main Courante exportée !", type="positive")
-
-            ui.button("Export CSV", icon="download", on_click=trigger_export).classes(
-                "bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold"
-            )
-
-        # 4. Rendu Réactif
-        @ui.refreshable
-        async def render_journal_content():
-            logs = (
-                await asyncio.to_thread(
-                    DatabaseService.get_main_courante_by_crise, crise_id
-                )
-                or []
-            )
-
-            q = (search_input.value or "").lower().strip()
-            c = str(filter_cat.value or "TOUS").upper()
-            d = str(filter_dir.value or "TOUTES").upper()
-            s = str(filter_statut.value or "TOUS").upper()
-
-            filtered = []
-            for item in logs:
-                if c != "TOUS" and str(item.get("categorie")).upper() != c:
-                    continue
-                if (
-                    s != "TOUS"
-                    and str(item.get("statut_info", "CONFIRMEE")).upper() != s
-                ):
-                    continue
-                if d != "TOUTES" and d != "TOUTES / GÉNÉRAL":
-                    if d not in str(item.get("direction_concernee", "")).upper():
-                        continue
-
-                txt = str(item.get("description") or item.get("message") or "").lower()
-                aut = str(item.get("auteur") or "").lower()
-                if q and (q not in txt and q not in aut):
-                    continue
-
-                filtered.append(item)
-
-            with ui.column().classes(
-                "w-full flex-grow overflow-y-auto gap-2 pr-2 border border-slate-800 bg-slate-950/40 p-3 rounded h-[350px]"
-            ):
-                if not filtered:
-                    ui.label("Aucun événement à afficher.").classes(
-                        "text-slate-400 italic text-sm p-4 text-center w-full"
-                    )
-                    return
-
-                for evt in filtered:
-                    prio_raw = str(evt.get("niveau_priorite") or "NORMALE").upper()
-                    prio_color = (
-                        "red"
-                        if prio_raw == "CRITIQUE"
-                        else ("amber" if prio_raw == "URGENT" else "blue")
-                    )
-                    raw_date = str(evt.get("horodatage") or evt.get("created_at") or "")
-                    horodatage_fmt = (
-                        raw_date[:19].replace("T", " à ") if raw_date else "N/A"
-                    )
-                    statut_info = str(evt.get("statut_info") or "CONFIRMEE").upper()
-                    assigned_dir = evt.get("direction_concernee")
-
-                    card_border = "border-slate-700"
-                    if statut_info == "A_VERIFIER":
-                        card_border = "border-amber-500/80 bg-amber-950/20"
-                    elif statut_info == "INVALIDEE":
-                        card_border = "border-red-600/60 opacity-60 bg-red-950/20"
-
-                    with ui.card().classes(
-                        f"w-full bg-slate-800/80 border {card_border} p-3 text-xs flex-none"
-                    ):
-                        with ui.row().classes(
-                            "justify-between items-center w-full mb-1"
-                        ):
-                            with ui.row().classes("items-center gap-2 flex-wrap"):
-                                ui.badge(
-                                    evt.get("categorie", "INFO"), color="grey-8"
-                                ).classes("font-mono font-bold")
-                                ui.badge(prio_raw, color=prio_color).classes(
-                                    "font-bold"
-                                )
-
-                                if assigned_dir and assigned_dir not in [
-                                    "TOUTES / GÉNÉRAL",
-                                    "TOUTES / GENERAL",
-                                    "None",
-                                    "",
-                                ]:
-                                    ui.badge(
-                                        f"🎯 {assigned_dir}", color="purple-9"
-                                    ).classes("font-bold text-[10px]")
-
-                                ui.label(f"🟢 {statut_info}").classes(
-                                    "text-slate-300 font-bold"
-                                )
-                                ui.label(horodatage_fmt).classes(
-                                    "text-slate-400 font-mono"
-                                )
-
-                            ui.label(
-                                f"Auteur : {evt.get('auteur', 'Opérateur')}"
-                            ).classes("font-bold text-slate-300")
-
-                        desc_text = str(
-                            evt.get("description") or evt.get("message") or ""
-                        )
-                        ui.label(desc_text).classes(
-                            "text-sm text-slate-100 font-sans mt-1 whitespace-pre-line"
-                        )
-
-        await render_journal_content()
-
-        async def handle_submit():
-            texte = input_desc.value
-            if not texte or not str(texte).strip():
-                ui.notify(
-                    "Veuillez saisir une description avant de consigner.",
-                    type="warning",
-                )
-                return
-
-            selected_dir = select_direction.value
-            dir_to_save = (
-                None
-                if selected_dir in ["TOUTES / GÉNÉRAL", "TOUTES / GENERAL"]
-                else selected_dir
-            )
-
-            ok = await asyncio.to_thread(
-                DatabaseService.consigner_main_courante,
-                crise_id=crise_id,
-                description=str(texte).strip(),
-                categorie=select_cat.value,
-                auteur="Opérateur SG",
-                niveau_priorite=select_prio.value,
-                direction_concernee=dir_to_save,
-                statut_info=select_statut_info.value,
-            )
-
-            if ok:
-                ui.notify("Événement consigné !", type="positive")
-                input_desc.set_value("")
-                render_journal_content.refresh()
-            else:
-                ui.notify("Échec de la consignation dans Supabase.", type="negative")
-
-        btn_send.on_click(handle_submit)
-        search_input.on("update:model-value", lambda: render_journal_content.refresh())
-        filter_cat.on("update:model-value", lambda: render_journal_content.refresh())
-        filter_dir.on("update:model-value", lambda: render_journal_content.refresh())
-        filter_statut.on("update:model-value", lambda: render_journal_content.refresh())
-
-    dialog.open()
-
-
-# =========================================================================
-# 💬 DIALOG : CREATION & EDIT CRISE
-# =========================================================================
 
 
 def open_new_crise_dialog():
@@ -440,7 +123,9 @@ def open_new_crise_dialog():
                     label="Type de crise",
                 ).classes("w-1/2")
                 select_gravite = ui.select(
-                    options=["1", "2", "3", "4"], value="2", label="Niveau de Gravité"
+                    options=["1", "2", "3", "4"],
+                    value="2",
+                    label="Niveau de Gravité",
                 ).classes("w-1/2")
 
             select_statut_initial = ui.select(
@@ -467,7 +152,7 @@ def open_new_crise_dialog():
             declencheur = "SG"
             try:
                 declencheur = (
-                    app.storage.user.get("nom")
+                    app.storage.user.get("nom_complet")
                     or app.storage.user.get("username")
                     or "SG"
                 )
@@ -702,12 +387,15 @@ async def open_edit_crise_dialog(crise):
                     with ui.row().classes("w-full justify-between items-center gap-2"):
                         select_role = ui.select(
                             options=[
-                                "Directeur",
+                                "Directeur de crise",
+                                "Responsable sûreté",
                                 "Responsable de cellule",
                                 "Chef de cellule",
                                 "Chef de service",
+                                "Officier de liaison",
+                                "Référent Cyber / SSI",
+                                "Rédacteur Main Courante",
                                 "Agent",
-                                "Rédacteur",
                                 "Administratif",
                             ],
                             value="Agent",
@@ -757,8 +445,7 @@ async def open_edit_crise_dialog(crise):
                                             )
 
                                         ui.button(
-                                            icon="delete",
-                                            on_click=delete_m,
+                                            icon="delete", on_click=delete_m
                                         ).props("flat color=red dense sm")
 
                         async def add_membre():
@@ -851,119 +538,11 @@ async def open_edit_crise_dialog(crise):
         with ui.row().classes(
             "justify-between w-full border-t border-slate-700 pt-3 mt-2"
         ):
+            ui.button("Supprimer", icon="delete", on_click=delete_crise_action).props(
+                "flat color=red sm"
+            )
             ui.button(
-                "Supprimer",
-                icon="delete",
-                on_click=delete_crise_action,
-            ).props("flat color=red sm")
-            ui.button(
-                "Clôturer / Archiver",
-                icon="archive",
-                on_click=archive_crise_action,
+                "Clôturer / Archiver", icon="archive", on_click=archive_crise_action
             ).props("color=orange sm font-bold")
 
     dialog.open()
-
-
-# =========================================================================
-# 🖥️ VUE PRINCIPALE
-# =========================================================================
-
-
-async def render_crises_view(is_sg_admin: bool):
-    """Rendu autonome de la section Cellules de Crise SG."""
-    with ui.column().classes("w-full gap-4"):
-        with ui.row().classes("items-center justify-between w-full mb-2"):
-            ui.label("Cellules de Crise Strategiques (SG)").classes(
-                "text-2xl font-bold tracking-tight text-red-400"
-            )
-
-            if is_sg_admin:
-                ui.button(
-                    "Déclarer une Crise",
-                    icon="add_alert",
-                    on_click=open_new_crise_dialog,
-                ).props("color=red sm font-bold")
-
-        crises = await asyncio.to_thread(DatabaseService.get_active_crises) or []
-
-        if not crises:
-            with ui.card().classes(
-                "w-full bg-slate-800/40 border border-slate-700 p-8 text-center"
-            ):
-                ui.label("Aucune cellule de crise active en ce moment.").classes(
-                    "text-slate-400 italic text-base"
-                )
-
-        for crise in crises:
-            c_code = getattr(crise, "code_crise", None) or (
-                crise.get("code_crise") if isinstance(crise, dict) else "CRISE"
-            )
-            c_titre = getattr(crise, "titre", None) or (
-                crise.get("titre") if isinstance(crise, dict) else "Sans titre"
-            )
-            c_type = getattr(crise, "type_crise", None) or (
-                crise.get("type_crise") if isinstance(crise, dict) else "SURETE"
-            )
-            c_gravite = str(
-                getattr(crise, "niveau_gravite", None)
-                or (crise.get("niveau_gravite") if isinstance(crise, dict) else "2")
-            ).replace("N", "")
-            c_declencheur = getattr(crise, "declenchee_par", None) or (
-                crise.get("declenchee_par") if isinstance(crise, dict) else "SG"
-            )
-            c_desc = getattr(crise, "description", None) or (
-                crise.get("description") if isinstance(crise, dict) else ""
-            )
-            c_statut = getattr(crise, "statut", None) or (
-                crise.get("statut") if isinstance(crise, dict) else "ACTIVEE"
-            )
-
-            card_bg = (
-                "bg-amber-950/20 border-amber-800/60"
-                if c_statut == "EN_SOMMEIL"
-                else "bg-red-950/30 border-red-800/80"
-            )
-
-            with ui.card().classes(f"w-full {card_bg} border p-5 shadow-lg mb-4"):
-                with ui.row().classes("justify-between items-start w-full"):
-                    with ui.column().classes("gap-1"):
-                        with ui.row().classes("items-center gap-3"):
-                            ui.badge(
-                                c_code,
-                                color=(
-                                    "amber-9" if c_statut == "EN_SOMMEIL" else "red"
-                                ),
-                            ).classes("font-mono font-bold")
-                            ui.label(c_titre).classes(
-                                "text-xl font-bold text-slate-100"
-                            )
-                            ui.badge(f"Gravité {c_gravite}", color="purple").classes(
-                                "font-bold"
-                            )
-
-                            if c_statut == "EN_SOMMEIL":
-                                ui.badge("EN SOMMEIL", color="warning").classes(
-                                    "font-bold animate-pulse"
-                                )
-
-                        ui.label(
-                            f"Type : {c_type} | Déclenchée par : {c_declencheur}"
-                        ).classes("text-xs text-slate-400 mt-1")
-
-                    with ui.row().classes("items-center gap-2"):
-                        if is_sg_admin:
-                            ui.button(
-                                icon="edit",
-                                on_click=lambda c=crise: open_edit_crise_dialog(c),
-                            ).props("flat color=slate-400 sm").tooltip("Gérer la crise")
-
-                        ui.button(
-                            "Main Courante de Crise",
-                            icon="assignment",
-                            on_click=lambda c=crise: open_main_courante_dialog(c),
-                        ).props("color=red sm font-bold")
-
-                ui.label(c_desc).classes(
-                    "text-sm text-slate-300 mt-3 bg-slate-900/40 p-3 rounded border border-slate-800"
-                )

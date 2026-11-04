@@ -2,16 +2,18 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# Chargement des variables du fichier .env
+# Chargement du fichier .env local (s'il existe)
 load_dotenv()
 
-SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+# Récupération et nettoyage strict des variables d'environnement système (Fly.io / Docker / Local)
+SUPABASE_URL: str = os.getenv("SUPABASE_URL", "").strip().strip('"').strip("'")
+SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "").strip().strip('"').strip("'")
 
+# Validation de la présence des identifiants au démarrage
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError(
         "⚠️ Configuration Supabase introuvable ! "
-        "Vérifie que SUPABASE_URL et SUPABASE_KEY sont correctement définis dans ton fichier .env."
+        "Vérifie que SUPABASE_URL et SUPABASE_KEY sont correctement définis."
     )
 
 # Instanciation globale du client Supabase

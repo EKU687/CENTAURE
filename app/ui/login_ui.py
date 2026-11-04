@@ -52,11 +52,13 @@ def render_login_page():
                     )
                     return
 
+                btn_login.props("loading")
                 user_data = await asyncio.to_thread(
                     DatabaseService.authenticate_user,
                     input_user.value,
                     input_pass.value,
                 )
+                btn_login.props(remove="loading")
 
                 if user_data:
                     app.storage.user["username"] = user_data["username"]
@@ -76,9 +78,11 @@ def render_login_page():
 
             input_pass.on("keydown.enter", do_password_login)
 
-            ui.button("SE CONNECTER", icon="login", on_click=do_password_login).props(
-                "color=blue-7 font-bold"
-            ).classes("w-full py-3")
+            btn_login = (
+                ui.button("SE CONNECTER", icon="login", on_click=do_password_login)
+                .props("color=blue-7 font-bold")
+                .classes("w-full py-3")
+            )
 
             # ------------------------------------------------------------------
             # Option 2 : Connexion par YubiKey OTP (Mode Portail GNC)
@@ -99,16 +103,20 @@ def render_login_page():
             )
 
             async def do_yubikey_login():
-                if not input_yubikey.value or len(input_yubikey.value.strip()) < 12:
+                otp_value = input_yubikey.value.strip() if input_yubikey.value else ""
+
+                if not otp_value or len(otp_value) < 12:
                     ui.notify(
                         "👉 Touchez le capteur doré de votre YubiKey...", type="info"
                     )
                     return
 
+                btn_yubikey.props("loading")
                 user_data = await asyncio.to_thread(
                     DatabaseService.authenticate_by_yubikey,
-                    input_yubikey.value,
+                    otp_value,
                 )
+                btn_yubikey.props(remove="loading")
 
                 if user_data:
                     app.storage.user["username"] = user_data["username"]
@@ -129,14 +137,18 @@ def render_login_page():
                     )
                     input_yubikey.value = ""
 
-            # La YubiKey envoie la touche 'Entrée' à la fin de sa frappe automatique
+            # La YubiKey envoie généralement la touche 'Entrée' à la fin de sa frappe
             input_yubikey.on("keydown.enter", do_yubikey_login)
 
-            ui.button(
-                "SE CONNECTER PAR YUBIKEY",
-                icon="vibration",
-                on_click=do_yubikey_login,
-            ).props("outline color=amber-5 font-bold").classes("w-full py-2 mt-1")
+            btn_yubikey = (
+                ui.button(
+                    "SE CONNECTER PAR YUBIKEY",
+                    icon="vibration",
+                    on_click=do_yubikey_login,
+                )
+                .props("outline color=amber-5 font-bold")
+                .classes("w-full py-2 mt-1")
+            )
 
             # Footer Version
             ui.label(

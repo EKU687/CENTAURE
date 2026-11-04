@@ -1,11 +1,18 @@
 import asyncio
+import traceback
 from nicegui import app, ui
 from app.core import config
 from app.services.database_service import DatabaseService
 from app.models.site import SiteCritique
-import app.ui.crises_ui as crises_ui
+import app.ui.crises as crises_ui
 import app.ui.annuaire_ui as annuaire_ui
 import app.ui.users_ui as users_ui
+
+# État global pour le mode COS et le rafraîchissement automatique
+cos_mode = False
+current_sites = []
+dialog_open = False  # Flag pour désactiver le polling quand un dialogue est ouvert
+site_cards_map = {}  # Mapping site_code -> ui.card pour les mises à jour incrémentales
 
 
 def get_status_color(level: str) -> str:
@@ -22,6 +29,21 @@ def get_status_color(level: str) -> str:
     return mapping.get(level, "grey")
 
 
+def get_status_icon(level: str) -> str:
+    """Retourne l'icône correspondante au niveau pour l'accessibilité (daltoniens)."""
+    icon_mapping = {
+        "S1": "check_circle",
+        "T1": "check_circle",
+        "S2": "info",
+        "T2": "info",
+        "S3": "warning",
+        "T3": "warning",
+        "S4": "gavel",
+        "T4": "gavel",
+    }
+    return icon_mapping.get(level, "help_outline")
+
+
 async def handle_global_s4():
     """Déclenche le passage S4 direct sur tous les sites."""
     print("🔴 [COCKPIT] Clic sur ALERTE GÉNÉRALE S4")
@@ -32,6 +54,11 @@ async def handle_global_s4():
             type="negative",
             duration=5.0,
         )
+        ui.run_javascript("""
+            const audio = new Audio("https://assets.mixkit.co/sfx/270/270.mp3");
+            audio.volume = 0.5;
+            audio.play().catch(e => console.log("Audio play failed:", e));
+        """)
         ui.navigate.reload()
     else:
         ui.notify("❌ Échec lors du déclenchement de l'alerte S4 !", type="warning")
@@ -47,6 +74,11 @@ async def handle_global_s1():
             type="positive",
             duration=5.0,
         )
+        ui.run_javascript("""
+            const audio = new Audio("https://assets.mixkit.co/sfx/286/286.mp3");
+            audio.volume = 0.3;
+            audio.play().catch(e => console.log("Audio play failed:", e));
+        """)
         ui.navigate.reload()
     else:
         ui.notify("❌ Échec lors du retour S1 !", type="warning")
@@ -54,9 +86,19 @@ async def handle_global_s1():
 
 def open_new_site_dialog():
     """Boîte de dialogue de création d'un nouveau site critique."""
+    global dialog_open
+    dialog_open = True
+
     with ui.dialog() as dialog, ui.card().classes(
         "w-full max-w-lg bg-slate-900 border border-slate-700 text-slate-100 p-6"
     ):
+
+        def on_dialog_hide():
+            global dialog_open
+            dialog_open = False
+
+        dialog.on("hide", on_dialog_hide)
+
         ui.label("Ajouter un Nouveau Site Sensible").classes(
             "text-xl font-bold text-blue-400 mb-4"
         )
@@ -99,489 +141,339 @@ def open_new_site_dialog():
     dialog.open()
 
 
-def open_inspection_dialog(site: SiteCritique):
-    """Boîte de dialogue d'inspection, d'édition et d'administration du site avec gestion dynamique des protocoles."""
-    with ui.dialog() as dialog, ui.card().classes(
-        "w-full max-w-2xl bg-slate-900 border border-slate-700 text-slate-100 p-6"
-    ):
-        with ui.row().classes(
-            "justify-between items-center w-full border-b border-slate-700 pb-3"
-        ):
-            with ui.row().classes("items-center gap-2"):
-                ui.icon("search", color="blue-4", size="md")
-                ui.label(f"Gestion Site : {site.nom} ({site.code_site})").classes(
-                    "text-xl font-bold"
-                )
-            ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+def open_inspection_dialog(site):
+    """Boîte de dialogue d'inspection et de gestion des consignes (Corrigée & Blindée UI)."""
+    global dialog_open
+    dialog_open = True
 
-        # ----------------------------------------------------------------------
-        # 1. Admin Niveaux S/T + Sélection du Protocole Spécifique + Motif
-        # ----------------------------------------------------------------------
-        with ui.column().classes(
-            "w-full bg-slate-800/80 p-4 rounded border border-slate-700 my-4 gap-3"
-        ):
-            ui.label("Administration des Niveaux & Événements").classes(
-                "text-sm font-bold text-slate-300"
+    try:
+        # Extraction sécurisée des informations du site (dict ou Pydantic/Objet)
+        if isinstance(site, dict):
+            site_code_val = site.get("code_site") or site.get("code", "")
+            site_nom_val = site.get("nom", "Site")
+            site_id_val = site.get("id")
+            site_loc_val = site.get("localisation", "")
+            surete_val = site.get("surete_niveau", "S1")
+            tech_val = site.get("technique_niveau", "T1")
+            anomalies_list = site.get("anomalies", []) or []
+            active_proto_id = site.get("active_protocol_id") or site.get("protocol_id")
+        else:
+            site_code_val = getattr(site, "code_site", getattr(site, "code", ""))
+            site_nom_val = getattr(site, "nom", "Site")
+            site_id_val = getattr(site, "id", None)
+            site_loc_val = getattr(site, "localisation", "") or ""
+            surete_val = getattr(site, "surete_niveau", "S1")
+            tech_val = getattr(site, "technique_niveau", "T1")
+            anomalies_list = getattr(site, "anomalies", []) or []
+            active_proto_id = getattr(
+                site, "active_protocol_id", getattr(site, "protocol_id", None)
             )
 
-            with ui.row().classes("w-full gap-4 items-center flex-wrap"):
-                select_s = ui.select(
-                    options=["S1", "S2", "S3", "S4"],
-                    value=site.surete_niveau,
-                    label="Niveau Sûreté",
-                ).classes("w-40")
-                select_t = ui.select(
-                    options=["T1", "T2", "T3", "T4"],
-                    value=site.technique_niveau,
-                    label="Niveau Technique",
-                ).classes("w-40")
+        print(f"🔍 [DEBUG] Ouverture dialogue pour : {site_nom_val} ({site_code_val})")
 
-            select_protocol = ui.select(
-                options={},
-                label="Protocole à appliquer pour cette posture",
-            ).classes("w-full mt-1")
+        # Generer l'URL Kiosque avec Token UUID
+        try:
+            real_kiosk_url = DatabaseService.get_kiosk_url_for_site(site_code_val)
+        except Exception as kiosk_err:
+            print(f"⚠️ Erreur génération URL Kiosque: {kiosk_err}")
+            real_kiosk_url = (
+                f"https://gnc-centaure.fly.dev/kiosk?token=erreur-recuperation"
+            )
 
-            async def load_protocols_for_select():
-                protocols = await asyncio.to_thread(
-                    DatabaseService.get_site_protocols, site.code_site
+        # Construction du Dialogue Unique
+        with ui.dialog() as dialog, ui.card().classes(
+            "w-full max-w-2xl bg-slate-900 border border-slate-700 text-slate-100 p-6 gap-4 shadow-2xl max-h-[90vh] overflow-y-auto"
+        ):
+
+            def on_dialog_hide():
+                global dialog_open
+                dialog_open = False
+
+            dialog.on("hide", on_dialog_hide)
+
+            # En-tête
+            with ui.row().classes(
+                "w-full items-center justify-between border-b border-slate-800 pb-3"
+            ):
+                with ui.row().classes("items-center gap-2"):
+                    ui.icon("settings", color="blue-4", size="md")
+                    ui.label(
+                        f"GESTION OPÉRATIONNELLE — {site_nom_val.upper()}"
+                    ).classes("text-lg font-bold")
+                ui.button(icon="close", on_click=dialog.close).props(
+                    "flat round dense color=slate-400"
                 )
 
-                # Récupération sécurisée du protocole actif sur le modèle Pydantic
-                active_proto_id = getattr(
-                    site, "active_protocol_id", getattr(site, "protocol_id", None)
+            # ----------------------------------------------------------------------
+            # 1. Admin Niveaux S/T + Sélection du Protocole Spécifique + Motif
+            # ----------------------------------------------------------------------
+            with ui.column().classes(
+                "w-full bg-slate-800/80 p-4 rounded border border-slate-700 my-2 gap-3"
+            ):
+                ui.label("Administration des Niveaux & Événements").classes(
+                    "text-sm font-bold text-slate-300"
                 )
 
-                # 1. Tenter un filtrage par niveau Sûreté ou Technique
-                filtered = {
-                    p["id"]: f"[{p['niveau']}] {p['titre']}"
-                    for p in protocols
-                    if p.get("niveau") in [select_s.value, select_t.value]
-                }
+                with ui.row().classes("w-full gap-4 items-center flex-wrap"):
+                    select_s = ui.select(
+                        options=["S1", "S2", "S3", "S4"],
+                        value=surete_val,
+                        label="Niveau Sûreté",
+                    ).classes("w-40")
+                    select_t = ui.select(
+                        options=["T1", "T2", "T3", "T4"],
+                        value=tech_val,
+                        label="Niveau Technique",
+                    ).classes("w-40")
 
-                # 2. Si aucun protocole spécifique ne filtre, proposer tous les protocoles du site
-                if not filtered and protocols:
-                    filtered = {
-                        p["id"]: f"[{p['niveau']}] {p['titre']}" for p in protocols
-                    }
+                select_protocol = ui.select(
+                    options={},
+                    label="Protocole à appliquer pour cette posture",
+                ).classes("w-full mt-1")
 
-                select_protocol.options = filtered
-
-                if filtered:
-                    if active_proto_id and active_proto_id in filtered:
-                        select_protocol.value = active_proto_id
-                    else:
-                        select_protocol.value = list(filtered.keys())[0]
-                else:
-                    select_protocol.value = None
-
-                select_protocol.update()
-
-            # Mise à jour réactive des options lors du changement de posture S ou T
-            select_s.on_value_change(lambda: load_protocols_for_select())
-            select_t.on_value_change(lambda: load_protocols_for_select())
-
-            # Chargement initial des protocoles
-            ui.timer(0.1, load_protocols_for_select, once=True)
-
-            input_motif = ui.input(
-                label="Motif / Commentaire (ex: Visite du Ministre, Réunion GNC...)",
-                placeholder="Renseigner la raison du changement de niveau...",
-            ).classes("w-full mt-1")
-
-            async def save_status():
-                ok = await asyncio.to_thread(
-                    DatabaseService.update_site_status,
-                    site.id,
-                    select_s.value,
-                    select_t.value,
-                    input_motif.value,
-                    select_protocol.value,
-                )
-                if ok:
-                    if select_s.value == "S4":
-                        ui.notify(
-                            f"⚠️ ORDRE DE CONFINEMENT DÉCLENCHÉ SUR {site.code_site} !",
-                            type="negative",
+                async def load_protocols_for_select():
+                    try:
+                        protocols = (
+                            await asyncio.to_thread(
+                                DatabaseService.get_site_protocols, site_code_val
+                            )
+                            or []
                         )
-                    else:
-                        ui.notify(
-                            "Statuts S/T et protocole consignés avec succès !",
-                            type="positive",
-                        )
-                    dialog.close()
-                    ui.navigate.reload()
+                        filtered = {
+                            p["id"]: f"[{p['niveau']}] {p['titre']}"
+                            for p in protocols
+                            if p.get("niveau") in [select_s.value, select_t.value]
+                        }
+                        if not filtered and protocols:
+                            filtered = {
+                                p["id"]: f"[{p['niveau']}] {p['titre']}"
+                                for p in protocols
+                            }
 
-            ui.button("Appliquer & Consigner", icon="save", on_click=save_status).props(
-                "color=blue sm"
-            ).classes("mt-2 self-end")
+                        select_protocol.options = filtered
+                        if filtered:
+                            if active_proto_id and active_proto_id in filtered:
+                                select_protocol.value = active_proto_id
+                            else:
+                                select_protocol.value = list(filtered.keys())[0]
+                        else:
+                            select_protocol.value = None
+                        select_protocol.update()
+                    except Exception as err:
+                        print(f"⚠️ Erreur chargement protocoles: {err}")
 
-        # ----------------------------------------------------------------------
-        # 2. Gestion Dynamique des Protocoles du Site
-        # ----------------------------------------------------------------------
-        with ui.expansion(
-            "📜 Éditer la Fiche & Gestionnaire des Protocoles", icon="edit"
-        ).classes("w-full bg-slate-800 border border-slate-700 rounded mb-4"):
-            with ui.column().classes("p-4 gap-4 w-full"):
-                with ui.row().classes("w-full gap-3"):
-                    edit_nom = ui.input(label="Nom du site", value=site.nom).classes(
-                        "w-1/2"
-                    )
-                    edit_loc = ui.input(
-                        label="Localisation", value=site.localisation or ""
-                    ).classes("w-1/2")
+                select_s.on_value_change(load_protocols_for_select)
+                select_t.on_value_change(load_protocols_for_select)
 
-                async def update_info_base():
+                input_motif = ui.input(
+                    label="Motif / Commentaire (ex: Visite du Ministre, Réunion GNC...)",
+                    placeholder="Renseigner la raison du changement de niveau...",
+                ).classes("w-full mt-1")
+
+                async def save_status():
                     ok = await asyncio.to_thread(
-                        DatabaseService.update_site_info,
-                        site.id,
-                        edit_nom.value,
-                        edit_loc.value,
-                        None,
+                        DatabaseService.update_site_status,
+                        site_id_val,
+                        select_s.value,
+                        select_t.value,
+                        input_motif.value,
+                        select_protocol.value,
                     )
                     if ok:
-                        ui.notify("Nom et Localisation mis à jour !", type="positive")
+                        if select_s.value == "S4":
+                            ui.notify(
+                                f"⚠️ ORDRE DE CONFINEMENT DÉCLENCHÉ SUR {site_code_val} !",
+                                type="negative",
+                            )
+                        else:
+                            ui.notify(
+                                "Statuts S/T et protocole consignés avec succès !",
+                                type="positive",
+                            )
+                        dialog.close()
                         ui.navigate.reload()
 
                 ui.button(
-                    "Mettre à jour l'identité", icon="check", on_click=update_info_base
-                ).props("color=blue sm")
+                    "Appliquer & Consigner", icon="save", on_click=save_status
+                ).props("color=blue sm").classes("mt-2 self-end")
 
-                ui.separator().classes("bg-slate-700 my-2")
+            # ----------------------------------------------------------------------
+            # 2. Gestion Dynamique des Protocoles du Site
+            # ----------------------------------------------------------------------
+            with ui.expansion(
+                "📜 Éditer la Fiche & Identité du Site", icon="edit"
+            ).classes("w-full bg-slate-800 border border-slate-700 rounded my-2"):
+                with ui.column().classes("p-4 gap-4 w-full"):
+                    with ui.row().classes("w-full gap-3"):
+                        edit_nom = ui.input(
+                            label="Nom du site", value=site_nom_val
+                        ).classes("w-1/2")
+                        edit_loc = ui.input(
+                            label="Localisation", value=site_loc_val
+                        ).classes("w-1/2")
 
-                protocols_container = ui.column().classes("w-full gap-2")
+                    async def update_info_base():
+                        ok = await asyncio.to_thread(
+                            DatabaseService.update_site_info,
+                            site_id_val,
+                            edit_nom.value,
+                            edit_loc.value,
+                            None,
+                        )
+                        if ok:
+                            ui.notify(
+                                "Nom et Localisation mis à jour !", type="positive"
+                            )
+                            ui.navigate.reload()
 
-                async def refresh_protocols_list():
-                    protocols_container.clear()
-                    current_protocols = await asyncio.to_thread(
-                        DatabaseService.get_site_protocols, site.code_site
+                    ui.button(
+                        "Mettre à jour l'identité",
+                        icon="check",
+                        on_click=update_info_base,
+                    ).props("color=blue sm")
+
+            # ----------------------------------------------------------------------
+            # 3. SÉCURITÉ POSTE DE GARDE : LIEN KIOSQUE SÉCURISÉ (ACCÈS DIRECT)
+            # ----------------------------------------------------------------------
+            with ui.column().classes(
+                "w-full bg-slate-800/90 p-4 rounded border border-slate-700 my-2 gap-2"
+            ):
+                with ui.row().classes("items-center gap-2"):
+                    ui.icon("screen_lock_portrait", color="blue-4", size="sm")
+                    ui.label("URL Sécurisée Poste de Garde (24/7)").classes(
+                        "text-xs font-bold text-slate-200"
                     )
 
-                    active_proto_id = getattr(
-                        site, "active_protocol_id", getattr(site, "protocol_id", None)
-                    )
+                ui.input(value=real_kiosk_url).props(
+                    "dense readonly outline dark"
+                ).classes("w-full font-mono text-xs text-blue-300 select-all")
 
-                    with protocols_container:
-                        if not current_protocols:
-                            ui.label(
-                                "Aucun protocole sur-mesure configuré pour ce site."
-                            ).classes("text-gray-400 italic text-xs p-1")
+            # ----------------------------------------------------------------------
+            # 4. Suivi & Anomalies Enregistrées
+            # ----------------------------------------------------------------------
+            ui.label("Historique & Maintenances Actives").classes(
+                "text-lg font-bold text-amber-400 mt-2"
+            )
+            if anomalies_list:
+                with ui.column().classes("w-full gap-2 mb-4"):
+                    for ano in anomalies_list:
+                        ano_id = getattr(ano, "id", None) or (
+                            ano.get("id") if isinstance(ano, dict) else None
+                        )
+                        ano_domaine = getattr(ano, "domaine", "") or (
+                            ano.get("domaine") if isinstance(ano, dict) else ""
+                        )
+                        ano_equipement = getattr(ano, "equipement", "") or (
+                            ano.get("equipement") if isinstance(ano, dict) else ""
+                        )
+                        ano_desc = getattr(ano, "description", "") or (
+                            ano.get("description") if isinstance(ano, dict) else ""
+                        )
 
-                        for proto in current_protocols:
-                            badge_color = get_status_color(proto.get("niveau", "S1"))
-                            is_active = active_proto_id and (
-                                proto.get("id") == active_proto_id
-                            )
-                            card_border = (
-                                "border-2 border-emerald-500/80 shadow-emerald-500/10"
-                                if is_active
-                                else "border border-slate-700"
-                            )
+                        with ui.row().classes(
+                            "w-full justify-between items-center bg-slate-800 p-3 rounded border border-slate-700"
+                        ):
+                            with ui.column().classes("gap-0"):
+                                ui.label(f"[{ano_domaine}] {ano_equipement}").classes(
+                                    "font-bold text-sm text-slate-200"
+                                )
+                                ui.label(ano_desc or "Aucune description").classes(
+                                    "text-xs text-slate-400"
+                                )
 
-                            with ui.card().classes(
-                                f"w-full bg-slate-900/90 text-slate-100 p-3 rounded {card_border}"
-                            ):
-                                with ui.row().classes(
-                                    "w-full items-center justify-between"
-                                ):
-                                    with ui.row().classes("items-center gap-2"):
-                                        ui.badge(
-                                            proto.get("niveau", "S1"), color=badge_color
-                                        ).classes("font-bold")
-                                        ui.label(
-                                            proto.get("titre", "Sans Titre")
-                                        ).classes("font-bold text-sm")
-                                        if is_active:
-                                            ui.badge(
-                                                "EN VIGUEUR", color="positive"
-                                            ).props("outline").classes("text-[10px]")
+                            async def resolve_ano_action(target_id=ano_id):
+                                ok = await asyncio.to_thread(
+                                    DatabaseService.resolve_anomalie, target_id
+                                )
+                                if ok:
+                                    ui.notify("Anomalie résolue !", type="positive")
+                                    dialog.close()
+                                    ui.navigate.reload()
 
-                                    with ui.row().classes("gap-1"):
-                                        ui.button(
-                                            icon="edit",
-                                            on_click=lambda p=proto: open_protocol_editor(
-                                                p
-                                            ),
-                                        ).props(
-                                            "flat round dense color=primary"
-                                        ).tooltip(
-                                            "Éditer"
-                                        )
-
-                                        ui.button(
-                                            icon="delete",
-                                            on_click=lambda p=proto: delete_protocol_action(
-                                                p
-                                            ),
-                                        ).props(
-                                            "flat round dense color=negative"
-                                        ).tooltip(
-                                            "Supprimer"
-                                        )
-
-                                with ui.expansion(
-                                    "Consignes d'application", icon="notes"
-                                ).classes(
-                                    "w-full text-xs text-slate-300 mt-2 bg-slate-950 p-1 rounded"
-                                ):
-                                    ui.markdown(
-                                        proto.get(
-                                            "consignes", "_Aucune consigne rédigée._"
-                                        )
-                                    )
-
-                async def delete_protocol_action(proto: dict):
-                    ok = await asyncio.to_thread(
-                        DatabaseService.delete_site_protocol, proto["id"]
-                    )
-                    if ok:
-                        ui.notify("Protocole supprimé.", type="warning")
-                        await refresh_protocols_list()
-                        await load_protocols_for_select()
-
-                def open_protocol_editor(proto=None):
-                    is_edit = proto is not None
-                    p_data = proto or {
-                        "site_code": site.code_site,
-                        "niveau": "S2",
-                        "titre": f"Protocole Spécifique - {site.code_site}",
-                        "consignes": "",
-                    }
-
-                    with ui.dialog() as proto_dlg, ui.card().classes(
-                        "w-full max-w-lg bg-slate-900 text-slate-100 p-4 border border-slate-700"
-                    ):
-                        ui.label(
-                            "✏️ Modifier Protocole"
-                            if is_edit
-                            else "➕ Ajouter un Protocole"
-                        ).classes("text-lg font-bold text-blue-400 mb-2")
-
-                        with ui.row().classes("w-full gap-2 items-center"):
-                            sel_niveau = ui.select(
-                                options=[
-                                    "S1",
-                                    "S2",
-                                    "S3",
-                                    "S4",
-                                    "T1",
-                                    "T2",
-                                    "T3",
-                                    "T4",
-                                ],
-                                value=p_data.get("niveau", "S2"),
-                                label="Posture",
-                            ).classes("w-1/3")
-
-                            in_titre = ui.input(
-                                label="Titre (ex: Visite VIP, Confinement DINUM)",
-                                value=p_data.get("titre", ""),
-                            ).classes("w-2/3")
-
-                        in_consignes = ui.textarea(
-                            label="Consignes spécifiques terrain (Markdown supporté)",
-                            value=p_data.get("consignes", ""),
-                        ).classes("w-full h-32 mt-2")
-
-                        async def save_proto():
-                            if not in_titre.value.strip():
-                                ui.notify("Le titre est obligatoire.", type="warning")
-                                return
-
-                            payload = {
-                                "site_code": site.code_site,
-                                "niveau": sel_niveau.value,
-                                "titre": in_titre.value,
-                                "consignes": in_consignes.value,
-                            }
-                            if is_edit:
-                                payload["id"] = p_data["id"]
-
-                            ok = await asyncio.to_thread(
-                                DatabaseService.save_site_protocol, payload
-                            )
-                            if ok:
-                                ui.notify("Protocole enregistré !", type="positive")
-                                proto_dlg.close()
-                                await refresh_protocols_list()
-                                await load_protocols_for_select()
-
-                        with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                            ui.button("Annuler", on_click=proto_dlg.close).props(
-                                "flat color=white"
-                            )
                             ui.button(
-                                "Enregistrer", icon="save", on_click=save_proto
-                            ).props("color=blue")
-
-                    proto_dlg.open()
-
-                ui.button(
-                    "➕ Ajouter un protocole à ce site",
-                    on_click=lambda: open_protocol_editor(),
-                ).props("color=positive sm class='w-full mb-2'")
-
-                ui.timer(0.1, refresh_protocols_list, once=True)
-
-        # ----------------------------------------------------------------------
-        # 3. SÉCURITÉ POSTE DE GARDE : LIEN KIOSQUE SÉCURISÉ
-        # ----------------------------------------------------------------------
-        with ui.row().classes(
-            "w-full justify-between items-center bg-slate-800/90 p-3 rounded border border-slate-700 my-2"
-        ):
-            with ui.row().classes("items-center gap-2"):
-                ui.icon("screen_lock_portrait", color="blue-4", size="sm")
-                ui.label("URL Sécurisée Poste de Garde (24/7)").classes(
-                    "text-xs font-bold text-slate-200"
+                                "Résoudre", icon="check", on_click=resolve_ano_action
+                            ).props("color=green flat sm")
+            else:
+                ui.label("Aucune anomalie active.").classes(
+                    "text-sm text-slate-400 italic mb-4"
                 )
 
-            def open_kiosk_modal():
-                with ui.dialog() as dlg, ui.card().classes(
-                    "w-full max-w-lg bg-slate-900 border border-slate-700 text-slate-100 p-6"
-                ):
-                    ui.label(f"🔒 Accès Permanent — Poste {site.code_site}").classes(
-                        "text-lg font-bold text-blue-400 mb-2"
-                    )
-                    ui.label(
-                        "Configurez cette URL sur le navigateur de l'écran du poste de garde (mode Kiosque) :"
-                    ).classes("text-xs text-slate-400 mb-4")
+            # ----------------------------------------------------------------------
+            # 5. Supprimer le site & Fermeture
+            # ----------------------------------------------------------------------
+            with ui.row().classes(
+                "w-full justify-between items-center border-t border-slate-700 pt-4 mt-4"
+            ):
 
-                    url_input = ui.input(
-                        label="URL d'accès sécurisée", value="Recherche du token..."
-                    ).classes("w-full font-mono text-xs mb-4")
-
-                    async def load_kiosk_url():
-                        try:
-                            # Récupération sécurisée du code site (supporte site.code_site ou site.code)
-                            target_code = getattr(
-                                site, "code_site", getattr(site, "code", str(site))
-                            )
-
-                            generated_url = await asyncio.to_thread(
-                                DatabaseService.get_kiosk_url_for_site, target_code
-                            )
-                            url_input.value = generated_url or "Erreur de génération"
-                        except Exception as err:
-                            print(f"❌ [DEBUG KIOSK MODAL] Erreur : {err}")
-                            # Affiche l'erreur exacte dans le champ pour diagnostic immédiat
-                            url_input.value = f"Erreur: {err}"
-
-                        url_input.update()
-
-                    def copy_to_clipboard():
-                        if url_input.value and "http" in url_input.value:
-                            ui.run_javascript(
-                                f'navigator.clipboard.writeText("{url_input.value}")'
-                            )
-                            ui.notify(
-                                f"📋 Lien sécurisé du poste {site.code_site} copié !",
-                                type="positive",
-                            )
-                        else:
-                            ui.notify("L'URL n'est pas encore prête.", type="warning")
-
-                    with ui.row().classes("w-full justify-end gap-2"):
-                        ui.button("Fermer", on_click=dlg.close).props("flat color=grey")
-                        ui.button(
-                            "Copier l'URL",
-                            icon="content_copy",
-                            on_click=copy_to_clipboard,
-                        ).props("color=blue sm")
-
-                # 1. Ouvrir la modale d'abord dans le navigateur
-                dlg.open()
-                # 2. Lancer immédiatement le chargement de l'URL
-                asyncio.create_task(load_kiosk_url())
-
-            ui.button(
-                "Obtenir le lien Kiosque", icon="key", on_click=open_kiosk_modal
-            ).props("outline color=blue-4 sm")
-
-        # ----------------------------------------------------------------------
-        # 4. Suivi & Anomalies Enregistrées
-        # ----------------------------------------------------------------------
-        ui.label("Historique & Maintenances Actives").classes(
-            "text-lg font-bold text-amber-400 mt-2"
-        )
-        if site.anomalies:
-            with ui.column().classes("w-full gap-2 mb-4"):
-                for ano in site.anomalies:
-                    with ui.row().classes(
-                        "w-full justify-between items-center bg-slate-800 p-3 rounded border border-slate-700"
+                def confirm_delete():
+                    with ui.dialog() as del_dialog, ui.card().classes(
+                        "bg-slate-900 border border-red-800 text-white p-6"
                     ):
-                        with ui.column().classes("gap-0"):
-                            ui.label(f"[{ano.domaine}] {ano.equipement}").classes(
-                                "font-bold text-sm text-slate-200"
+                        ui.label(
+                            f"Voulez-vous vraiment SUPPRIMER le site {site_code_val} ?"
+                        ).classes("text-lg font-bold text-red-400 mb-4")
+                        with ui.row().classes("justify-end gap-2 w-full"):
+                            ui.button("Annuler", on_click=del_dialog.close).props(
+                                "flat color=grey"
                             )
-                            ui.label(ano.description or "Aucune description").classes(
-                                "text-xs text-slate-400"
+
+                            async def do_delete():
+                                ok = await asyncio.to_thread(
+                                    DatabaseService.delete_site, site_id_val
+                                )
+                                if ok:
+                                    ui.notify("Site supprimé !", type="negative")
+                                    del_dialog.close()
+                                    dialog.close()
+                                    ui.navigate.reload()
+
+                            ui.button(
+                                "Supprimer définitivement",
+                                color="red",
+                                on_click=do_delete,
                             )
+                    del_dialog.open()
 
-                        async def resolve_ano_action(anomalie_id=ano.id):
-                            ok = await asyncio.to_thread(
-                                DatabaseService.resolve_anomalie, anomalie_id
-                            )
-                            if ok:
-                                ui.notify("Anomalie résolue !", type="positive")
-                                dialog.close()
-                                ui.navigate.reload()
+                ui.button(
+                    "Supprimer ce site", icon="delete", on_click=confirm_delete
+                ).props("flat color=red sm")
+                ui.button("FERMER", on_click=dialog.close).props(
+                    "color=slate-700 text-slate-200"
+                )
 
-                        ui.button(
-                            "Résoudre",
-                            icon="check",
-                            on_click=resolve_ano_action,
-                        ).props("color=green flat sm")
-        else:
-            ui.label("Aucune anomalie active.").classes(
-                "text-sm text-slate-400 italic mb-4"
-            )
+            # Chargement initial des protocoles au show
+            dialog.on("show", load_protocols_for_select)
 
-        # ----------------------------------------------------------------------
-        # 5. Supprimer le site
-        # ----------------------------------------------------------------------
-        with ui.row().classes(
-            "w-full justify-between items-center border-t border-slate-700 pt-4 mt-4"
-        ):
+        dialog.open()
 
-            def confirm_delete():
-                with ui.dialog() as del_dialog, ui.card().classes(
-                    "bg-slate-900 border border-red-800 text-white p-6"
-                ):
-                    ui.label(
-                        f"Voulez-vous vraiment SUPPRIMER le site {site.code_site} ?"
-                    ).classes("text-lg font-bold text-red-400 mb-4")
-                    with ui.row().classes("justify-end gap-2 w-full"):
-                        ui.button("Annuler", on_click=del_dialog.close).props(
-                            "flat color=grey"
-                        )
-
-                        async def do_delete():
-                            ok = await asyncio.to_thread(
-                                DatabaseService.delete_site, site.id
-                            )
-                            if ok:
-                                ui.notify("Site supprimé !", type="negative")
-                                del_dialog.close()
-                                dialog.close()
-                                ui.navigate.reload()
-
-                        ui.button(
-                            "Supprimer définitivement", color="red", on_click=do_delete
-                        )
-                del_dialog.open()
-
-            ui.button(
-                "Supprimer ce site", icon="delete", on_click=confirm_delete
-            ).props("flat color=red sm")
-
-    dialog.open()
+    except Exception as global_err:
+        print(f"🔥 ERREUR CRITIQUE OPEN_DIALOG : {global_err}")
+        traceback.print_exc()
+        ui.notify(
+            f"Impossible d'ouvrir la gestion du site : {global_err}", type="negative"
+        )
 
 
 async def create_cockpit_page():
-    """Interface du Cockpit Central réorganisée par Onglets avec RBAC."""
+    """Interface du Cockpit Central avec gestion multi-rôles dont CRISE_SG."""
+    await ui.context.client.connected()
     user_role = app.storage.user.get("role", "GUEST")
-    is_sg_admin = user_role in ["ADMIN", "SUPERVISEUR_SG", "OPERATEUR_SG"]
+    user_name = app.storage.user.get(
+        "nom_complet", app.storage.user.get("username", "Utilisateur")
+    )
 
-    # Header Global avec Versioning, Titre & Bouton Déconnexion
+    # MATRICE DES DROITS RBAC
+    is_admin = user_role == "ADMIN"
+    is_superviser = user_role == "SUPERVISEUR_SG"
+    is_operator = user_role == "OPERATEUR_SG"
+    is_crisis_member = user_role in ["CRISE_SG", "CELLULE_CRISE"]
+
+    can_access_hypervision = is_admin or is_superviser or is_operator
+    can_access_crises = is_admin or is_superviser or is_crisis_member
+    can_trigger_global_alerts = is_admin or is_superviser or is_operator
+    can_manage_sites = is_admin or is_superviser
+
+    # HEADER GLOBAL
     with ui.header().classes(
         "bg-slate-900 text-white items-center justify-between px-6 py-2 border-b border-slate-700"
     ):
@@ -593,210 +485,437 @@ async def create_cockpit_page():
                 )
                 ui.label("| SG").classes("text-xs text-slate-400 font-medium")
 
-                # Badge Version Officiel
                 ui.badge(config.DISPLAY_VERSION, color="slate-800").classes(
                     "text-[10px] font-mono border border-slate-700 text-slate-300 px-2 py-0.5 ml-1"
                 )
 
-            # Navigation Onglets
             with ui.tabs().classes("text-white") as tabs:
-                tab_sites = ui.tab("Sites Sensibles", icon="grid_view")
-                if is_sg_admin:
+                tab_sites = None
+                tab_crises = None
+                tab_annuaire = None
+                tab_users = None
+                tab_journal = None
+
+                if can_access_hypervision:
+                    tab_sites = ui.tab("Sites Sensibles", icon="grid_view")
+
+                if can_access_crises:
                     tab_crises = ui.tab("Cellules de Crise", icon="warning")
                     tab_annuaire = ui.tab("Annuaire RH", icon="people")
-                    if user_role == "ADMIN":
-                        tab_users = ui.tab("Gestion Accès", icon="manage_accounts")
 
-        # Actions Globales & Bouton de Déconnexion (Log Out)
+                if can_access_hypervision:
+                    tab_journal = ui.tab("Journal des Alertes", icon="history")
+
+                if is_admin:
+                    tab_users = ui.tab("Gestion Accès", icon="manage_accounts")
+
         with ui.row().classes("items-center gap-3"):
-            ui.button(
-                "RETOUR S1 GENERAL", icon="verified", on_click=handle_global_s1
-            ).props("color=positive font-bold sm")
-
-            ui.button(
-                "ALERTE GÉNÉRALE S4", icon="gavel", on_click=handle_global_s4
-            ).props("color=red font-bold animate-pulse sm")
+            if can_trigger_global_alerts:
+                ui.button(
+                    "RETOUR S1 GENERAL", icon="verified", on_click=handle_global_s1
+                ).props("color=positive font-bold sm")
+                ui.button(
+                    "ALERTE GÉNÉRALE S4", icon="gavel", on_click=handle_global_s4
+                ).props("color=red font-bold animate-pulse sm")
 
             ui.badge("TEMPS RÉEL", color="positive")
 
+            role_color_map = {
+                "ADMIN": "purple-5",
+                "SUPERVISEUR_SG": "blue-5",
+                "CRISE_SG": "orange-5",
+                "OPERATEUR_SG": "teal-5",
+            }
+            role_color = role_color_map.get(user_role, "slate-400")
+
+            with ui.row().classes(
+                "items-center gap-2 bg-slate-800/80 px-3 py-1 rounded-full border border-slate-700 ml-2"
+            ):
+                ui.icon("account_circle", size="sm", color="slate-300")
+                with ui.column().classes("gap-0 leading-none"):
+                    ui.label(user_name).classes("text-xs font-bold text-slate-200")
+                    ui.label(user_role).classes(
+                        f"text-[9px] font-mono text-{role_color}"
+                    )
+
             def do_logout():
-                user_name = app.storage.user.get("nom_complet", "Utilisateur")
+                current_user_name = app.storage.user.get("nom_complet", "Utilisateur")
                 app.storage.user.clear()
-                ui.notify(f"Déconnexion réussie. À bientôt {user_name} !", type="info")
+                ui.notify(
+                    f"Déconnexion réussie. À bientôt {current_user_name} !", type="info"
+                )
                 ui.navigate.to("/login")
 
-            ui.button(
-                icon="logout",
-                on_click=do_logout,
-            ).props(
+            ui.button(icon="logout", on_click=do_logout).props(
                 "flat round color=red-4 sm"
             ).tooltip("Se déconnecter du Cockpit")
 
-    # Contenu Principal via Tab Panels
-    with ui.tab_panels(tabs, value=tab_sites).classes(
+    default_tab = tab_crises if is_crisis_member else tab_sites
+
+    with ui.tab_panels(tabs, value=default_tab).classes(
         "w-full bg-slate-950 min-h-screen text-slate-100 p-6"
     ):
-        # ----------------------------------------------------------------------
         # ONGLET 1 : HYPERVISION DES SITES SENSIBLES
-        # ----------------------------------------------------------------------
-        with ui.tab_panel(tab_sites):
-            with ui.row().classes("items-center justify-between w-full mb-6"):
-                with ui.row().classes("items-center gap-4"):
-                    ui.label("Hypervision des Sites Sensibles").classes(
-                        "text-2xl font-bold tracking-tight"
+        if can_access_hypervision and tab_sites:
+            with ui.tab_panel(tab_sites):
+                with ui.row().classes("items-center justify-between w-full mb-6"):
+                    with ui.row().classes("items-center gap-4"):
+                        ui.label("Hypervision des Sites Sensibles").classes(
+                            "text-2xl font-bold tracking-tight"
+                        )
+                        if can_manage_sites:
+                            ui.button(
+                                "Nouveau Site",
+                                icon="add",
+                                on_click=open_new_site_dialog,
+                            ).props("color=blue sm font-bold")
+
+                    with ui.row().classes("items-center gap-3"):
+                        search_input = (
+                            ui.input(placeholder="Rechercher un site...")
+                            .props("dense dark icon=search outline")
+                            .classes("w-64")
+                        )
+                        ui.button(
+                            "Rafraîchir",
+                            icon="refresh",
+                            on_click=lambda: render_sites_grid(search_input.value),
+                        ).props("flat color=white sm")
+
+                global current_sites
+                current_sites = (
+                    await asyncio.to_thread(DatabaseService.get_all_sites) or []
+                )
+
+                kpi_banner_container = ui.row().classes(
+                    "w-full gap-4 mb-6 justify-center"
+                )
+
+                def update_kpi_banner():
+                    kpi_banner_container.clear()
+                    s4_count = sum(
+                        1 for site in current_sites if site.surete_niveau == "S4"
                     )
-                    ui.button(
-                        "Nouveau Site", icon="add", on_click=open_new_site_dialog
-                    ).props("color=blue sm font-bold")
-
-                with ui.row().classes("items-center gap-3"):
-                    search_input = (
-                        ui.input(placeholder="Rechercher un site...")
-                        .props("dense dark icon=search outline")
-                        .classes("w-64")
+                    s3_count = sum(
+                        1 for site in current_sites if site.surete_niveau == "S3"
                     )
-                    ui.button(
-                        "Rafraîchir",
-                        icon="refresh",
-                        on_click=lambda: ui.navigate.reload(),
-                    ).props("flat color=white sm")
+                    t4_count = sum(
+                        1 for site in current_sites if site.technique_niveau == "T4"
+                    )
+                    t3_count = sum(
+                        1 for site in current_sites if site.technique_niveau == "T3"
+                    )
 
-            sites = await asyncio.to_thread(DatabaseService.get_all_sites) or []
-
-            sites_grid = ui.grid().classes(
-                "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 w-full"
-            )
-
-            def render_sites_grid(filter_text=""):
-                sites_grid.clear()
-                with sites_grid:
-                    for site in sites:
-                        if (
-                            filter_text
-                            and filter_text.lower() not in site.nom.lower()
-                            and filter_text.lower() not in site.code_site.lower()
-                        ):
-                            continue
-
-                        if site.surete_niveau == "S4":
-                            card_style = "bg-red-950/90 border-4 border-red-600 text-slate-100 p-5 shadow-2xl animate-pulse"
-                        elif site.surete_niveau == "S3":
-                            card_style = "bg-amber-950/40 border-2 border-amber-500 text-slate-100 p-5 shadow-xl shadow-amber-500/20 animate-pulse"
-                        elif site.surete_niveau == "S2" or site.technique_niveau in [
-                            "T2",
-                            "T3",
-                            "T4",
-                        ]:
-                            card_style = "bg-slate-900 border border-amber-600/60 text-slate-100 p-5 shadow-lg"
-                        else:
-                            card_style = "bg-slate-800 border border-slate-700 text-slate-100 p-5 shadow-lg"
-
-                        with ui.card().classes(card_style):
-                            with ui.row().classes(
-                                "justify-between items-center w-full mb-2"
-                            ):
-                                ui.label(site.code_site).classes(
-                                    "font-extrabold text-xl text-slate-100"
-                                )
-                                ui.label(site.localisation or "N/C").classes(
-                                    "text-xs text-slate-400"
-                                )
-
-                            ui.label(site.nom).classes(
-                                "text-sm text-slate-300 mb-2 h-10 line-clamp-2"
+                    with kpi_banner_container:
+                        if s4_count > 0:
+                            ui.badge(f"🚨 {s4_count} S4", color="red").classes(
+                                "text-2xl font-bold p-4 animate-pulse"
                             )
+                        if s3_count > 0:
+                            ui.badge(f"⚠️ {s3_count} S3", color="amber").classes(
+                                "text-2xl font-bold p-4 animate-pulse"
+                            )
+                        if t4_count > 0:
+                            ui.badge(f"🛠️ {t4_count} T4", color="orange").classes(
+                                "text-2xl font-bold p-4 animate-pulse"
+                            )
+                        if t3_count > 0:
+                            ui.badge(f"🔧 {t3_count} T3", color="orange-8").classes(
+                                "text-xl font-bold p-4"
+                            )
+
+                update_kpi_banner()
+
+                def toggle_cos_mode():
+                    global cos_mode
+                    cos_mode = not cos_mode
+                    render_sites_grid(search_input.value)
+                    ui.notify(
+                        f"Mode COS {'activé' if cos_mode else 'désactivé'}", type="info"
+                    )
+
+                with ui.row().classes("w-full justify-end mb-4"):
+                    ui.button(
+                        f"Mode COS : {'ACTIF' if cos_mode else 'INACTIF'}",
+                        icon="monitor",
+                        on_click=toggle_cos_mode,
+                    ).props(f"color={'blue' if cos_mode else 'grey'} sm font-bold")
+
+                def get_grid_classes():
+                    return (
+                        "grid-cols-2 lg:grid-cols-4 xl:grid-cols-6"
+                        if cos_mode
+                        else "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                    )
+
+                sites_grid = ui.grid().classes(f"{get_grid_classes()} gap-6 w-full")
+
+                def render_sites_grid(filter_text=""):
+                    sites_grid.clear()
+                    sites_grid.classes(f"{get_grid_classes()} gap-6 w-full")
+                    with sites_grid:
+                        for site in current_sites:
+                            if (
+                                filter_text
+                                and filter_text.lower() not in site.nom.lower()
+                                and filter_text.lower() not in site.code_site.lower()
+                            ):
+                                continue
 
                             if site.surete_niveau == "S4":
-                                with ui.row().classes(
-                                    "w-full bg-red-600 text-white p-2 rounded justify-center items-center gap-2 mb-3"
-                                ):
-                                    ui.icon("warning", size="sm")
-                                    ui.label("CONFINEMENT EN COURS").classes(
-                                        "font-black text-xs tracking-wider"
-                                    )
+                                card_style = "bg-red-950/90 border-4 border-red-600 text-slate-100 p-5 shadow-2xl animate-pulse"
                             elif site.surete_niveau == "S3":
+                                card_style = "bg-amber-950/40 border-2 border-amber-500 text-slate-100 p-5 shadow-xl shadow-amber-500/20 animate-pulse"
+                            elif (
+                                site.surete_niveau == "S2"
+                                or site.technique_niveau in ["T2", "T3", "T4"]
+                            ):
+                                card_style = "bg-slate-900 border border-amber-600/60 text-slate-100 p-5 shadow-lg"
+                            else:
+                                card_style = "bg-slate-800 border border-slate-700 text-slate-100 p-5 shadow-lg"
+
+                            with ui.card().classes(card_style):
                                 with ui.row().classes(
-                                    "w-full bg-amber-600/80 text-white p-1.5 rounded justify-center items-center gap-2 mb-3"
+                                    "justify-between items-center w-full mb-2"
                                 ):
-                                    ui.icon("priority_high", size="xs")
-                                    ui.label("ALERTE SÛRETÉ S3").classes(
-                                        "font-bold text-xs tracking-wider"
+                                    ui.label(site.code_site).classes(
+                                        "font-extrabold text-xl text-slate-100"
                                     )
-
-                            with ui.row().classes("gap-3 w-full mb-4 justify-start"):
-                                with ui.row().classes("items-center gap-1"):
-                                    ui.label("Sûreté :").classes(
+                                    ui.label(site.localisation or "N/C").classes(
                                         "text-xs text-slate-400"
                                     )
-                                    ui.badge(
-                                        site.surete_niveau,
-                                        color=get_status_color(site.surete_niveau),
-                                    ).classes("font-bold")
 
-                                with ui.row().classes("items-center gap-1"):
-                                    ui.label("Technique :").classes(
-                                        "text-xs text-slate-400"
+                                ui.label(site.nom).classes(
+                                    "text-sm text-slate-300 mb-2 h-10 line-clamp-2"
+                                )
+
+                                if site.surete_niveau == "S4":
+                                    with ui.row().classes(
+                                        "w-full bg-red-600 text-white p-2 rounded justify-center items-center gap-2 mb-3"
+                                    ):
+                                        ui.icon("warning", size="sm")
+                                        ui.label("CONFINEMENT EN COURS").classes(
+                                            "font-black text-xs tracking-wider"
+                                        )
+                                elif site.surete_niveau == "S3":
+                                    with ui.row().classes(
+                                        "w-full bg-amber-600/80 text-white p-1.5 rounded justify-center items-center gap-2 mb-3"
+                                    ):
+                                        ui.icon("priority_high", size="xs")
+                                        ui.label("ALERTE SÛRETÉ S3").classes(
+                                            "font-bold text-xs tracking-wider"
+                                        )
+
+                                with ui.row().classes(
+                                    "gap-3 w-full mb-4 justify-start"
+                                ):
+                                    with ui.row().classes("items-center gap-1"):
+                                        ui.label("Sûreté :").classes(
+                                            "text-xs text-slate-400"
+                                        )
+                                        with ui.row().classes("items-center gap-1"):
+                                            ui.icon(
+                                                get_status_icon(site.surete_niveau),
+                                                size="xs",
+                                            )
+                                            ui.badge(
+                                                site.surete_niveau,
+                                                color=get_status_color(
+                                                    site.surete_niveau
+                                                ),
+                                            ).classes("font-bold")
+
+                                    with ui.row().classes("items-center gap-1"):
+                                        ui.label("Technique :").classes(
+                                            "text-xs text-slate-400"
+                                        )
+                                        with ui.row().classes("items-center gap-1"):
+                                            ui.icon(
+                                                get_status_icon(site.technique_niveau),
+                                                size="xs",
+                                            )
+                                            ui.badge(
+                                                site.technique_niveau,
+                                                color=get_status_color(
+                                                    site.technique_niveau
+                                                ),
+                                            ).classes("font-bold")
+
+                                async def open_site_kiosk_screen(site_code: str):
+                                    url = await asyncio.to_thread(
+                                        DatabaseService.get_kiosk_url_for_site,
+                                        site_code,
                                     )
-                                    ui.badge(
-                                        site.technique_niveau,
-                                        color=get_status_color(site.technique_niveau),
-                                    ).classes("font-bold")
+                                    if url:
+                                        ui.navigate.to(url, new_tab=True)
+                                    else:
+                                        ui.notify(
+                                            f"❌ Jeton Kiosque introuvable pour {site_code}",
+                                            type="warning",
+                                        )
 
-                            make_manage_handler = (
-                                lambda s_target=site: lambda: open_inspection_dialog(
-                                    s_target
-                                )
-                            )
-
-                            async def open_site_kiosk_screen(site_code: str):
-                                url = await asyncio.to_thread(
-                                    DatabaseService.get_kiosk_url_for_site, site_code
-                                )
-                                if url:
-                                    ui.navigate.to(url, new_tab=True)
-                                else:
-                                    ui.notify(
-                                        f"❌ Jeton Kiosque introuvable pour {site_code}",
-                                        type="warning",
-                                    )
-
-                            make_site_screen_handler = lambda code_target=site.code_site: lambda: open_site_kiosk_screen(
-                                code_target
-                            )
-
-                            with ui.row().classes("w-full gap-2 mt-auto"):
-                                ui.button(
-                                    "Gérer", on_click=make_manage_handler()
-                                ).props("sm outline color=grey-4").classes("w-1/2")
-
-                                ui.button(
-                                    "Écran Site",
-                                    icon="open_in_new",
-                                    on_click=make_site_screen_handler(),
-                                ).props("sm color=blue-7").classes("w-1/2").tooltip(
-                                    "Ouvrir l'écran de supervision Kiosque sécurisé"
+                                make_site_screen_handler = lambda code_target=site.code_site: lambda: open_site_kiosk_screen(
+                                    code_target
                                 )
 
-            search_input.on("update:model-value", lambda e: render_sites_grid(e.value))
-            render_sites_grid()
+                                with ui.row().classes("w-full gap-2 mt-auto"):
+                                    if can_manage_sites:
+                                        make_manage_handler = lambda s_target=site: lambda: open_inspection_dialog(
+                                            s_target
+                                        )
+                                        ui.button(
+                                            "Gérer", on_click=make_manage_handler()
+                                        ).props("sm outline color=grey-4").classes(
+                                            "w-1/2"
+                                        )
+                                        ui.button(
+                                            "Écran Site",
+                                            icon="open_in_new",
+                                            on_click=make_site_screen_handler(),
+                                        ).props("sm color=blue-7").classes(
+                                            "w-1/2"
+                                        ).tooltip(
+                                            "Ouvrir l'écran de supervision Kiosque sécurisé"
+                                        )
+                                    else:
+                                        ui.button(
+                                            "Écran Site",
+                                            icon="open_in_new",
+                                            on_click=make_site_screen_handler(),
+                                        ).props("sm color=blue-7").classes(
+                                            "w-full"
+                                        ).tooltip(
+                                            "Ouvrir l'écran de supervision Kiosque sécurisé"
+                                        )
 
-        # ----------------------------------------------------------------------
+                async def refresh_sites():
+                    global current_sites, dialog_open
+                    if not dialog_open:
+                        current_sites = (
+                            await asyncio.to_thread(DatabaseService.get_all_sites) or []
+                        )
+                        update_kpi_banner()
+                        render_sites_grid(search_input.value)
+
+                ui.timer(5.0, refresh_sites, once=False)
+                search_input.on(
+                    "update:model-value", lambda e: render_sites_grid(e.value)
+                )
+                render_sites_grid()
+
         # ONGLET 2 : CELLULES DE CRISE SG
-        # ----------------------------------------------------------------------
-        if is_sg_admin:
+        if can_access_crises and tab_crises:
             with ui.tab_panel(tab_crises):
-                await crises_ui.render_crises_view(is_sg_admin=is_sg_admin)
+                await crises_ui.render_crises_view(is_sg_admin=can_access_crises)
 
-        # ----------------------------------------------------------------------
         # ONGLET 3 : ANNUAIRE RH & ASTREINTES
-        # ----------------------------------------------------------------------
-        if is_sg_admin:
+        if can_access_crises and tab_annuaire:
             with ui.tab_panel(tab_annuaire):
                 annuaire_ui.render_annuaire_view()
 
-        # ----------------------------------------------------------------------
+        # ONGLET 3b : JOURNAL DES ALERTES (HISTORIQUE DES CHANGEMENTS)
+        if can_access_hypervision and tab_journal:
+            with ui.tab_panel(tab_journal):
+                with ui.column().classes("w-full gap-4"):
+                    ui.label("Journal des Changements de Niveaux S/T").classes(
+                        "text-2xl font-bold"
+                    )
+
+                    all_sites = (
+                        await asyncio.to_thread(DatabaseService.get_all_sites) or []
+                    )
+                    site_options = {site.code_site: site.nom for site in all_sites}
+                    site_options["TOUS"] = "Tous les sites"
+
+                    filter_site = ui.select(
+                        options=site_options, value="TOUS", label="Filtrer par site"
+                    ).classes("w-full max-w-md")
+
+                    changes = await asyncio.to_thread(
+                        DatabaseService.get_recent_level_changes, limit=100
+                    )
+                    changes_container = ui.column().classes("w-full gap-2")
+
+                    async def render_journal(filter_site_value="TOUS"):
+                        changes_container.clear()
+                        filtered_changes = changes
+
+                        if filter_site_value != "TOUS":
+                            filtered_changes = [
+                                c
+                                for c in changes
+                                if c.get("site_code") == filter_site_value
+                            ]
+
+                        if not filtered_changes:
+                            with changes_container:
+                                ui.label("Aucun changement enregistré.").classes(
+                                    "text-slate-400 italic"
+                                )
+                        else:
+                            with changes_container:
+                                for change in filtered_changes:
+                                    level_badge_color = (
+                                        "red"
+                                        if "S4" in change.get("domaine", "")
+                                        or "T4" in change.get("domaine", "")
+                                        else (
+                                            "amber"
+                                            if "S3" in change.get("domaine", "")
+                                            or "T3" in change.get("domaine", "")
+                                            else (
+                                                "orange-8"
+                                                if "S2" in change.get("domaine", "")
+                                                or "T2" in change.get("domaine", "")
+                                                else "positive"
+                                            )
+                                        )
+                                    )
+
+                                    with ui.card().classes(
+                                        "w-full bg-slate-900 border border-slate-700 p-4"
+                                    ):
+                                        with ui.row().classes(
+                                            "w-full justify-between items-start"
+                                        ):
+                                            with ui.column().classes("gap-1"):
+                                                ui.label(
+                                                    f"[{change.get('site_code', 'N/C')}] {change.get('site_nom', 'N/C')}"
+                                                ).classes("font-bold text-lg")
+                                                domaine_info = change.get(
+                                                    "domaine", "N/C"
+                                                )
+                                                equipement_info = change.get(
+                                                    "equipement", "N/C"
+                                                )
+                                                ui.label(
+                                                    f"Domaine: {domaine_info} | Équipement: {equipement_info}"
+                                                ).classes("text-sm text-slate-400")
+                                                ui.label(
+                                                    change.get(
+                                                        "description",
+                                                        "Aucune description",
+                                                    )
+                                                ).classes("text-sm text-slate-300 mt-1")
+
+                                            with ui.column().classes("items-end gap-2"):
+                                                ui.badge(
+                                                    change.get("statut", "ACTIF"),
+                                                    color=level_badge_color,
+                                                ).classes("font-bold")
+                                                ui.label(
+                                                    str(change.get("timestamp", "N/C"))[
+                                                        :19
+                                                    ]
+                                                ).classes("text-xs text-slate-500")
+
+                    filter_site.on(
+                        "update:model-value",
+                        lambda e: asyncio.create_task(render_journal(e.value)),
+                    )
+                    await render_journal()
+
         # ONGLET 4 : GESTION DES ACCÈS & YUBIKEYS (ADMIN UNIQUEMENT)
-        # ----------------------------------------------------------------------
-        if user_role == "ADMIN":
+        if is_admin and tab_users:
             with ui.tab_panel(tab_users):
                 users_ui.render_users_management_view()

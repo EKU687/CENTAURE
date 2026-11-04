@@ -3,6 +3,17 @@ from nicegui import ui
 from app.services.database_service import DatabaseService
 
 
+def get_role_badge_color(role: str) -> str:
+    """Retourne la couleur Quasar du badge selon le rôle applicatif."""
+    mapping = {
+        "ADMIN": "purple-7",
+        "SUPERVISEUR_SG": "blue-7",
+        "CRISE_SG": "orange-7",
+        "OPERATEUR_SG": "teal-7",
+    }
+    return mapping.get(role, "grey-7")
+
+
 def render_users_management_view():
     """Vue d'administration des utilisateurs et association des YubiKeys."""
     ui.label("Gestion des Accès & Clés de Sécurité YubiKey").classes(
@@ -14,7 +25,7 @@ def render_users_management_view():
     async def register_yubikey_action(user_id: str, username: str):
         """Enrôlement YubiKey en mode touch-only (sans exigence de PIN ni resident key)."""
         ui.notify(
-            f"👉 Touchez le capteur doré de la YubiKey dès qu'elle clignote...",
+            "👉 Touchez le capteur doré de la YubiKey dès qu'elle clignote...",
             type="info",
             duration=15.0,
         )
@@ -113,7 +124,6 @@ def render_users_management_view():
                 "👉 Touchez le capteur doré de votre YubiKey pour l'enregistrer..."
             ).classes("text-xs text-slate-300 my-3")
 
-            # Champ de capture qui reçoit la frappe de la YubiKey
             input_yubi = (
                 ui.input(placeholder="Touchez la YubiKey ici...")
                 .props("dark outline autofocus icon=vibration password")
@@ -123,7 +133,6 @@ def render_users_management_view():
             async def process_yubikey_input():
                 val = input_yubi.value.strip()
                 if len(val) >= 12:
-                    # Extraction des 12 premiers caractères (Clé Publique unique)
                     public_id = val[:12]
                     print(f"🔑 [YUBIKEY] Clé Publique détectée : {public_id}")
 
@@ -148,10 +157,8 @@ def render_users_management_view():
                         "⚠️ Signal YubiKey trop court, réessayez.", type="warning"
                     )
 
-            # La YubiKey envoie la touche 'Entrée' à la fin de sa frappe
             input_yubi.on("keydown.enter", process_yubikey_input)
 
-            # Bouton de validation manuelle de secours si besoin
             ui.button(
                 "VALIDER L'EMPREINTE", icon="check", on_click=process_yubikey_input
             ).props("color=amber-7 class=w-full mb-2")
@@ -181,19 +188,17 @@ def render_users_management_view():
                                 ui.label(
                                     user.get("nom_complet") or user["username"]
                                 ).classes("font-bold text-base")
+
+                                # Badge dynamique selon le rôle utilisateur
                                 ui.badge(
                                     user["role"],
-                                    color=(
-                                        "blue-7"
-                                        if user["role"] == "ADMIN"
-                                        else "grey-7"
-                                    ),
-                                ).classes("text-[10px]")
+                                    color=get_role_badge_color(user["role"]),
+                                ).classes("text-[10px] font-mono")
+
                             ui.label(f"Identifiant : {user['username']}").classes(
                                 "text-xs text-slate-400 font-mono"
                             )
 
-                        # Actions : Éditer, Supprimer & Associer YubiKey
                         with ui.row().classes("gap-2 items-center"):
                             ui.button(
                                 "Associer YubiKey",
@@ -234,16 +239,20 @@ def render_users_management_view():
             in_user = ui.input(
                 label="Identifiant (login)", value=u_data["username"]
             ).classes("w-full mb-2")
+
             in_nom = ui.input(
                 label="Nom Complet", value=u_data.get("nom_complet", "")
             ).classes("w-full mb-2")
+
             in_pass = ui.input(
                 label="Mot de passe"
                 + (" (laisser vide si inchangé)" if is_edit else ""),
                 password=True,
             ).classes("w-full mb-2")
+
+            # Sélecteur avec intégration du rôle CRISE_SG
             sel_role = ui.select(
-                options=["OPERATEUR_SG", "SUPERVISEUR_SG", "ADMIN"],
+                options=["OPERATEUR_SG", "CRISE_SG", "SUPERVISEUR_SG", "ADMIN"],
                 value=u_data["role"],
                 label="Rôle",
             ).classes("w-full mb-4")

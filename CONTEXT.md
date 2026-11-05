@@ -1,4 +1,4 @@
----
+**---
 
 ---
 ---
@@ -355,4 +355,4 @@ Fly.io Documentation
 Supabase Documentation
 PyInstaller Documentation
 Document préparé pour la prochaine discussion technique sur CENTAURE.
-À jour avec l’analyse de cockpit.py et les besoins du COS.
+À jour avec l’analyse de cockpit.py et les besoins du COS.**

@@ -1,32 +1,29 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 13/11/2026 soir — SÉANCE FINALISATION COS ET COMMIT
+**Dernière mise à jour :** 13/11/2026 soir — SÉANCE FINALISATION COS, COMMIT,
+ET MIGRATION PCO APPLIQUÉE
 **Branche :** `main` — refonte PCO + correctifs session 12/11 + fin COS :
 **commit réalisé ce 13/11** ( Serveur DEV tournant en arrière-plan de la
-session ; migration Supabase toujours en attente ; pas de mise en PROD, sur
-décision utilisateur )
+session ; migration Supabase SQL appliquée ce soir ; pas de mise en PROD,
+sur décision utilisateur )
 
 ---
 
 ## 🔄 PROCHAINE SÉANCE — À FAIRE DANS L'ORDRE
 
-1. **Migration Supabase (toujours en attente)** : exécuter
-   `sql/migration_pco.sql` dans le SQL Editor Supabase (idempotent) — ajoute
-   `activated_at` (centaure_crises) et `type_sitrep` (centaure_sitreps).
-   Supprime ensuite l'erreur `PGRST204` (SITREP #2 du 12/11 inséré sans
-   typage). Alternative : fournir un access token Supabase pour application
-   via CLI.
-2. **Recette navigateur Main Courante** si non faite : F5 sur la page PCO,
+1. **Recette navigateur Main Courante** si non faite : F5 sur la page PCO,
    dialogue EC32 → événements visibles ; consigner → fermeture/rouverture
    automatique, nouvel événement en tête ; bascule « Inclure dans SITREP »
-   idem ; compteurs PCO auto sous 30 s.
-3. **Chantier « écran mural »** : page dédiée de supervision globale de tous
+   idem ; compteurs PCO auto sous 30 s. À l'occasion : activer une cellule
+   → vérifier que `activated_at` est écrit (chrono) et qu'un SITREP FDJ
+   porte bien `type_sitrep='CLOTURE_JOURNALIERE'`.
+2. **Chantier « écran mural »** : page dédiée de supervision globale de tous
    les sites (sur le modèle de la page agent `/site/<CODE>` ou du kiosque
    `/kiosk`), en remplacement de l'ancien bouton MODE COS supprimé ce jour.
-4. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
+3. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
    cockpit (à la place des dialogues de gestion actuels).
-5. **Main Courante terrain** (`app/ui/site_agent.py`).
-6. **Déploiement Fly.io** : pas avant validation utilisateur explicite.
+4. **Main Courante terrain** (`app/ui/site_agent.py`).
+5. **Déploiement Fly.io** : pas avant validation utilisateur explicite.
 
 ---
 
@@ -131,18 +128,19 @@ Décisions prises et raisons :
   asynchrones (`asyncio.to_thread`).
 - `SUIVI_DEV.md` : création.
 
-## Migration PCO — état
+## Migration PCO — état ✅ APPLIQUÉE
 
-`sql/migration_pco.sql` **n'est toujours pas appliquée** : impossible
-d'exécuter du DDL depuis l'API PostgREST (clé anon uniquement), aucun jeton
-d'accès Supabase ni URL de connexion BD disponibles sur ce poste. Deux
-moyens d'application :
-1. (Recommandé) Supabase Dashboard → SQL Editor → coller le contenu de
-   `sql/migration_pco.sql` → Run (idempotent, ~15 s).
-2. Fournir un `SUPABASE_ACCESS_TOKEN` (Settings → API → Access tokens) pour
-   que l'agent applique la migration via le CLI `supabase db execute`.
-Le code reste résilient en attendant (repli sur `created_at` pour le chrono,
-insertion SITREP sans typage).
+`sql/migration_pco.sql` **a été appliquée le 13/11/2026 soir** via le SQL
+Editor Supabase (par l'utilisateur, aucune erreur). Vérification en lecture
+depuis l'application juste après :
+- `centaure_sitreps.type_sitrep` : présent, et les 2 SITREP existants
+  (n°1 et n°2 — dont celui du 12/11 inséré sans typage) rattrapés à
+  `'STANDARD'` par l'UPDATE de rattrapage. L'erreur `PGRST204` ne se
+  reproduira plus.
+- `centaure_crises.activated_at` : présent, `NULL` sur les 4 crises
+  existantes (attendu — repli `created_at` pour elles) ; la prochaine
+  activation d'une cellule écrira l'horodatage.
+- `_test_pco_ro.py` relancé après migration : **PASS** (`TEST_PCO_OK`).
 
 ## Commit du 13/11 — contenu (tout l'arbre de travail)
 
@@ -183,13 +181,9 @@ insertion SITREP sans typage).
 
 ## Problèmes connus
 
-1. **Migration PCO non appliquée en base Supabase** — vérifié en lecture :
-   les colonnes `activated_at` (centaure_crises) et `type_sitrep`
-   (centaure_sitreps) **n'existent pas** en base. Conséquences acceptées :
-   chrono PCO en repli sur `created_at` (56 j pour les crises ACTIVÉE
-   existantes) et SITREP FDJ créés sans typage. **Action requise :** exécuter
-   `sql/migration_pco.sql` dans le SQL Editor Supabase (idempotent).
-   ⚠ Opération BDD : à confirmer avant exécution.
+1. ~~Migration PCO non appliquée en base Supabase~~ **SOLDE le 13/11 soir** :
+   `sql/migration_pco.sql` appliquée via SQL Editor, colonnes `activated_at`
+   et `type_sitrep` vérifiées en base (voir § Migration PCO — état).
 2. `directeur=None` pour CRISE-2026-EC32 : aucun membre n'a de fonction
    contenant « directeur » — état de données, pas un bug code.
 3. **Enquête 12/11 soir — « événements consignés n'apparaissent pas »** :
@@ -236,10 +230,9 @@ insertion SITREP sans typage).
 
 ## Prochaine action précise
 
-1. Appliquer `sql/migration_pco.sql` sur Supabase (voir § Migration PCO),
-   puis relancer `_test_pco_ro.py` — attendu : `activated_at` renseigné
-   après prochaine activation, `type_sitrep` présent sur les sitreps.
-2. Recette navigateur Main Courante (si non déjà faite ce 13/11).
-3. Chantier suivant au choix : écran mural (page dédiée supervision
+1. Recette navigateur Main Courante (si non déjà faite ce 13/11) — à
+   l'occasion, vérifier `activated_at` écrit à la prochaine activation et
+   `type_sitrep` sur un nouveau SITREP FDJ.
+2. Chantier suivant au choix : écran mural (page dédiée supervision
    globale) ou Main Courante terrain (`app/ui/site_agent.py`).
-4. Déploiement Fly.io : seulement sur demande explicite.
+3. Déploiement Fly.io : seulement sur demande explicite.

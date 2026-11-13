@@ -25,6 +25,7 @@ from app.core import config
 from app.services.database_service import DatabaseService
 from app.ui.cockpit import create_cockpit_page
 from app.ui.site_agent import create_site_page
+from app.ui.wall import create_wall_page
 from app.ui.login_ui import render_login_page
 
 # ----------------------------------------------------------------------
@@ -121,6 +122,59 @@ async def kiosk_page(token: str = ""):
 
     # Rendu direct de l'interface Poste de Garde pour le site validé
     create_site_page(site_code)
+
+
+# ----------------------------------------------------------------------
+# Route 2bis : Écran Mural de Supervision Globale ( /wall ) - Jeton Kiosque
+# ----------------------------------------------------------------------
+@ui.page("/wall")
+async def wall_page(token: str = ""):
+    """Écran mural : supervision globale de tous les sites, lecture seule.
+
+    Accès par jeton kiosque valide (même jeton que les postes de garde) :
+    un écran mural n'a pas de login. Aucune action possible depuis cette page.
+    """
+    clean_token = str(token).strip() if token else ""
+
+    if not clean_token or any(
+        err in clean_token.lower() for err in ["erreur", "introuvable", "none", "null"]
+    ):
+        with ui.column().classes(
+            "w-full h-screen items-center justify-center bg-slate-950 text-red-500 p-8 text-center"
+        ):
+            ui.icon("screen_lock_portrait", size="xl", color="red-5")
+            ui.label("ACCÈS ÉCRAN MURAL REFUSÉ").classes(
+                "text-2xl font-black text-red-500 tracking-wider mt-4"
+            )
+            ui.label("Jeton d'accès manquant ou format invalide.").classes(
+                "text-slate-300 text-sm mt-2"
+            )
+        return
+
+    try:
+        site_data = await asyncio.to_thread(
+            DatabaseService.get_site_by_kiosk_token, clean_token
+        )
+    except Exception as e:
+        print(f"❌ Erreur lors de la validation du token écran mural : {e}")
+        site_data = None
+
+    if not site_data:
+        with ui.column().classes(
+            "w-full h-screen items-center justify-center bg-slate-950 text-amber-500 p-8 text-center"
+        ):
+            ui.icon("no_accounts", size="xl", color="amber-5")
+            ui.label("JETON INCONNU OU EXPIRÉ").classes(
+                "text-2xl font-black text-amber-500 tracking-wider mt-4"
+            )
+            ui.label(
+                "Ce jeton n'est pas reconnu par le serveur Supabase."
+            ).classes("text-slate-300 text-sm mt-2")
+        return
+
+    app.storage.client["wall_open"] = True
+    print("✅ Accès Écran Mural accordé (supervision globale)")
+    create_wall_page()
 
 
 # ----------------------------------------------------------------------

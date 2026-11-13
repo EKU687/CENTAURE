@@ -83,6 +83,69 @@ async def handle_global_s1():
         ui.notify("❌ Échec lors du retour S1 !", type="warning")
 
 
+async def open_wall_link_dialog():
+    """Affiche l'URL de l'écran mural (copiable/ouvrable) pour l'installer sur un poste."""
+    if not current_sites:
+        ui.notify("Aucun site suivi : impossible de générer le lien mural.", type="warning")
+        return
+
+    # Le mur accepte n'importe quel jeton kiosque valide ; on utilise le 1er site connu.
+    code_reference = current_sites[0].code_site
+    try:
+        kiosk_url = await asyncio.to_thread(
+            DatabaseService.get_kiosk_url_for_site, code_reference
+        )
+    except Exception as err:
+        print(f"⚠️ Erreur génération URL murale : {err}")
+        kiosk_url = None
+    if not kiosk_url:
+        ui.notify("Erreur de génération du lien mural.", type="negative")
+        return
+
+    wall_url = kiosk_url.replace("/kiosk?", "/wall?")
+
+    with ui.dialog() as dialog, ui.card().classes(
+        "w-full max-w-xl bg-slate-900 border border-slate-700 text-slate-100 p-6 gap-4"
+    ):
+        with ui.row().classes("items-center gap-2 w-full border-b border-slate-800 pb-3 mb-2"):
+            ui.icon("monitor", color="amber-4", size="md")
+            ui.label("Écran Mural — Supervision Globale").classes(
+                "text-lg font-bold text-amber-400"
+            )
+            ui.button(icon="close", on_click=dialog.close).props(
+                "flat round dense color=slate-400"
+            )
+
+        ui.label(
+            "À installer une seule fois sur l'écran de la salle : ouvrir l'URL "
+            "ci-dessous en plein écran (F11), puis cliquer une fois sur "
+            "« SON D'ALERTE » pour armer la sirène S4."
+        ).classes("text-xs text-slate-400 leading-relaxed")
+
+        champ = (
+            ui.input(value=wall_url)
+            .props("dense readonly outline dark")
+            .classes("w-full font-mono text-xs text-amber-300 select-all")
+        )
+
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button(
+                "COPIER",
+                icon="content_copy",
+                on_click=lambda: ui.run_javascript(
+                    f"navigator.clipboard.writeText({wall_url!r})"
+                ),
+            ).props("color=amber outline sm")
+
+            ui.button(
+                "OUVRIR L'ÉCRAN",
+                icon="open_in_new",
+                on_click=lambda: ui.run_javascript(f"window.open({wall_url!r}, '_blank')"),
+            ).props("color=amber sm font-bold")
+
+    dialog.open()
+
+
 def open_new_site_dialog():
     """Boîte de dialogue de création d'un nouveau site critique."""
     global dialog_open
@@ -178,6 +241,9 @@ def open_inspection_dialog(site):
             real_kiosk_url = (
                 f"https://gnc-centaure.fly.dev/kiosk?token=erreur-recuperation"
             )
+
+        # URL Écran Mural (supervision globale) : même jeton que le poste de garde
+        wall_url = real_kiosk_url.replace("/kiosk?", "/wall?")
 
         # Construction du Dialogue Unique
         with ui.dialog() as dialog, ui.card().classes(
@@ -346,6 +412,16 @@ def open_inspection_dialog(site):
                 ui.input(value=real_kiosk_url).props(
                     "dense readonly outline dark"
                 ).classes("w-full font-mono text-xs text-blue-300 select-all")
+
+                with ui.row().classes("items-center gap-2 mt-2"):
+                    ui.icon("monitor", color="amber-4", size="sm")
+                    ui.label("URL Écran Mural — Supervision Globale (salle PCO)").classes(
+                        "text-xs font-bold text-slate-200"
+                    )
+
+                ui.input(value=wall_url).props(
+                    "dense readonly outline dark"
+                ).classes("w-full font-mono text-xs text-amber-300 select-all")
 
             # ----------------------------------------------------------------------
             # 4. Suivi & Anomalies Enregistrées
@@ -580,6 +656,13 @@ async def create_cockpit_page():
                             icon="refresh",
                             on_click=lambda: render_sites_grid(search_input.value),
                         ).props("flat color=white sm")
+                        ui.button(
+                            "Écran mural",
+                            icon="monitor",
+                            on_click=open_wall_link_dialog,
+                        ).props("color=amber sm outline font-bold").tooltip(
+                            "URL d'installation de l'écran de supervision globale (salle PCO)"
+                        )
 
                 global current_sites
                 current_sites = (

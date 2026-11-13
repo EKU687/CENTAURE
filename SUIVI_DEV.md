@@ -1,9 +1,9 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 13/11/2026 soir — SÉANCE FINALISATION COS, COMMIT,
-ET MIGRATION PCO APPLIQUÉE
-**Branche :** `main` — refonte PCO + correctifs session 12/11 + fin COS :
-**commit réalisé ce 13/11** ( Serveur DEV tournant en arrière-plan de la
+**Dernière mise à jour :** 13/11/2026 soir (suite) — SÉANCE COS + MIGRATION +
+**CHANTIER ÉCRAN MURAL LIVRÉ** (page /wall, alerte S4 sonore, lien exposé)
+**Branche :** `main` — refonte PCO + correctifs session 12/11 + fin COS
+**committés le 13/11** ( Serveur DEV tournant en arrière-plan de la
 session ; migration Supabase SQL appliquée ce soir ; pas de mise en PROD,
 sur décision utilisateur )
 
@@ -17,13 +17,12 @@ sur décision utilisateur )
    idem ; compteurs PCO auto sous 30 s. À l'occasion : activer une cellule
    → vérifier que `activated_at` est écrit (chrono) et qu'un SITREP FDJ
    porte bien `type_sitrep='CLOTURE_JOURNALIERE'`.
-2. **Chantier « écran mural »** : page dédiée de supervision globale de tous
-   les sites (sur le modèle de la page agent `/site/<CODE>` ou du kiosque
-   `/kiosk`), en remplacement de l'ancien bouton MODE COS supprimé ce jour.
-3. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
+2. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
    cockpit (à la place des dialogues de gestion actuels).
-4. **Main Courante terrain** (`app/ui/site_agent.py`).
-5. **Déploiement Fly.io** : pas avant validation utilisateur explicite.
+3. **Main Courante terrain** (`app/ui/site_agent.py`).
+4. **Déploiement Fly.io** : pas avant validation utilisateur explicite.
+   Au déploiement : vérifier `APP_URL` (utilisée pour générer les URL
+   kiosque/murale affichées dans le cockpit).
 
 ---
 
@@ -75,6 +74,48 @@ Décisions prises et raisons :
    voit les sites uniquement (et peut modifier les niveaux — constaté
    conforme) ; le gestionnaire de crise arrive directement sur les
    cellules de crise.
+
+---
+
+## 🖥️ Écran mural — livré le 13/11 (validation utilisateur)
+
+Page `/wall` de supervision globale, en remplacement du MODE COS supprimé :
+
+1. **Accès** : `/wall?token=<jeton kiosque valide>` (même jeton que les
+   postes de garde — un écran mural n'a pas de login). Accepte
+   actuellement n'importe quel `kiosk_token` de `centaure_sites` ; un
+   jeton dédié au mur serait une petite migration future.
+2. **Contenu** : identité + horloge NC (tick/seconde), compteurs
+   S4/S3/T4/T3, grille dense 2-6 colonnes des sites (code, nom,
+   localisation, jetons S/T, anomalies actives). Lecture seule.
+3. **Rafraîchissement 10 s** (passé de 30 s après remarque utilisateur —
+   les niveaux changent par action humaine, inutile de descendre plus bas ;
+   coût négligeable). En cas de perte de liaison Supabase : dernier état
+   conservé + bandeau d'avertissement.
+4. **Alerte S4 (confinement)** : bannière rouge lisible (rouge plein,
+   texte blanc, seul l'icône clignote — le bouton ACQUITTER est blanc à
+   texte rouge vif : la 1re version souffrait d'une prop Quasar invalide
+   `text=` au lieu de `text-color`) + **sirène nucléaire** Web Audio
+   (dent de scie 390-1250 Hz balayée en continu — les bips doux ont été
+   jugés trop discrets par l'utilisateur, remplacés sur demande).
+   Le son doit être **armé par un clic** une fois par écran (règle
+   d'autoplay navigateurs), confirmation par trois notes montantes.
+   Acquittement manuel ; **nouvel épisode** si un site sort de S4 puis
+   y revient (l'acquittement ne vaut que pour l'épisode en cours).
+   Correctif en passant : l'acquittement doit porter son propre contexte
+   client (le clic supprime son propre bouton — tâche de fond
+   `background_tasks`, sinon `ui.run_javascript` lève une erreur
+   d'élément supprimé).
+5. **Où trouver le lien** : bouton « Écran mural » sur la page principale
+   de l'hypervision (bandeau recherche, visible par tous les rôles
+   hypervision) → dialogue avec URL copiable + COPIER (presse-papiers) +
+   OUVRIR L'ÉCRAN + consigne F11/armement son. Aussi présent en référence
+   dans le dialogue de gestion d'un site (à côté de l'URL poste de garde).
+6. **Tests** : `_test_wall.py` (simulation : page réelle + scénario S4
+   stubé — bannière + site listé + acquittement masque) ; `_test_wall_link.py`
+   (simulation ADMIN : bouton, dialogue, URL — BDD stubée pour isolation
+   réseau, WinError 10035 en simulation Windows uniquement, le serveur DEV
+   n'est pas affecté) ; smoke HTTP jeton valide/invalide/absent.
 
 ---
 
@@ -245,12 +286,19 @@ depuis l'application juste après :
    Mitigation en cours : `PYTHONUNBUFFERED=1` dans l'environnement au
    démarrage du serveur DEV. Les `logger.warning` s'affichent toujours
    (flush auto).
+5. **Anomalies restées `ACTIF` après retour au niveau nominal** (constat
+   13/11 via l'écran mural) : DOUMER — « Pb de badge entrée NORD »
+   (30/09), DINUM — « Perte de 2 caméras » (01/10). Les deux sites sont
+   revenus S1/T1 sans que les anomalies de leur passage en T2 soient
+   soldées. État de données, pas un bug code. **Action requise :** passer
+   ces anomalies en `RESOLU` si les pannes sont réparées — ou acter un
+   chantier « clôture automatique des anomalies au retour au vert ».
 
 ## Prochaine action précise
 
 1. Recette navigateur Main Courante (si non déjà faite ce 13/11) — à
    l'occasion, vérifier `activated_at` écrit à la prochaine activation et
    `type_sitrep` sur un nouveau SITREP FDJ.
-2. Chantier suivant au choix : écran mural (page dédiée supervision
-   globale) ou Main Courante terrain (`app/ui/site_agent.py`).
+2. Chantier suivant au choix : branchement direct « Cellules de Crise »
+   depuis le cockpit, ou Main Courante terrain (`app/ui/site_agent.py`).
 3. Déploiement Fly.io : seulement sur demande explicite.

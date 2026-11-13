@@ -1,11 +1,10 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 13/11/2026 soir (suite) — SÉANCE COS + MIGRATION +
-**CHANTIER ÉCRAN MURAL LIVRÉ** (page /wall, alerte S4 sonore, lien exposé)
-**Branche :** `main` — refonte PCO + correctifs session 12/11 + fin COS
-**committés le 13/11** ( Serveur DEV tournant en arrière-plan de la
-session ; migration Supabase SQL appliquée ce soir ; pas de mise en PROD,
-sur décision utilisateur )
+**Dernière mise à jour :** 13/11/2026 soir (fin) — COS + MIGRATION + ÉCRAN MURAL
++ **DÉPLOIEMENT FLY.IO RÉALISÉ** (Mode: PRODUCTION, recette en ligne OK)
+**Branche :** `main` — refonte PCO + fin COS + écran mural **committés et
+poussés** ( Serveur DEV local éteint recommandé au prochain arrêt ;
+migration Supabase appliquée ; voir § Déploiement du 13/11 )
 
 ---
 
@@ -20,9 +19,15 @@ sur décision utilisateur )
 2. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
    cockpit (à la place des dialogues de gestion actuels).
 3. **Main Courante terrain** (`app/ui/site_agent.py`).
-4. **Déploiement Fly.io** : pas avant validation utilisateur explicite.
-   Au déploiement : vérifier `APP_URL` (utilisée pour générer les URL
-   kiosque/murale affichées dans le cockpit).
+4. **Rotation du mot de passe applicatif Gmail (SMTP)** si non faite côté
+   Google — l'ancien est exposé via l'historique GitHub public
+   (voir § Sécurité). Puis mise à jour de `.env` et ajout des secrets
+   SMTP/BREVO sur Fly si la diffusion e-mail des SITREP doit marcher en
+   ligne (`flyctl secrets set SMTP_PASSWORD=... BREVO_API_KEY=......`).
+5. **Brancher l'écran physique de la salle PCO** sur
+   `https://gnc-centaure.fly.dev/wall?token=<jeton kiosque>` (F11 +
+   armement du son), via le bouton « Écran mural » du cockpit pour copier
+   le lien.
 
 ---
 
@@ -116,6 +121,38 @@ Page `/wall` de supervision globale, en remplacement du MODE COS supprimé :
    (simulation ADMIN : bouton, dialogue, URL — BDD stubée pour isolation
    réseau, WinError 10035 en simulation Windows uniquement, le serveur DEV
    n'est pas affecté) ; smoke HTTP jeton valide/invalide/absent.
+
+---
+
+## 🚀 Déploiement du 13/11 (soir) — PROD Fly.io
+
+- **Secrets posés** : `APP_ENV=production` (le conteneur tournait jusqu'ici
+  en mode development — reload=True ! désormais `Mode: PRODUCTION` dans
+  les logs, reload/show désactivés) et `SECRET_KEY` forte aléatoire
+  (les sessions utilisateurs ont été invalidées une fois — attendu).
+- `flyctl deploy --remote-only` : image construite à distance, machine
+  `784756dc` (syd) redémarrée, health check passing.
+- **Recette en ligne PASSÉE** : `/` et `/login` → 200 ;
+  `/kiosk?token=DINUM` → garde accordée (logs) ; `/kiosk` mauvais jeton →
+  « JETON INCONNU OU EXPIRÉ » ; `/wall?token=DINUM` → bannière
+  « ÉCRAN DE SUPERVISION GLOBALE » rendue ; `/wall` sans jeton → refusé ;
+  `/site/DINUM` direct → anti-triche « ACCÈS REFUSÉ ».
+- Les anciens logs PROD montraient exactement les coupures Supabase
+  (`Server disconnected`/`ConnectionTerminated`) corrigées par
+  `run_supabase` — désormais déployé en ligne.
+
+## 🔐 Sécurité (audit pré-déploiement du 13/11)
+
+- **Aucune clé privée dans l'image Docker** : `.dockerignore` exclut
+  `.env`, `*.pem`, `*.key`, `.streamlit`, `.venv` ; la clé Supabase est
+  une `sb_publishable_` (publiable par conception) ; les secrets Fly sont
+  injectés au lancement, jamais cuits dans l'image.
+- **Retiré du suivi git** : `.streamlit/secrets.toml` contenait le mot de
+  passe applicatif SMTP et était **poussé sur le dépôt GitHub public**
+  (repo `EKU687/CENTAURE`). Le fichier est retiré de l'index (reste local,
+  ignoré) et poussé ; **l'historique GitHub le conserve** — la rotation du
+  mot de passe côté Google reste la protection décisionnelle (point 4 de
+  la checklist).
 
 ---
 
@@ -301,4 +338,5 @@ depuis l'application juste après :
    `type_sitrep` sur un nouveau SITREP FDJ.
 2. Chantier suivant au choix : branchement direct « Cellules de Crise »
    depuis le cockpit, ou Main Courante terrain (`app/ui/site_agent.py`).
-3. Déploiement Fly.io : seulement sur demande explicite.
+3. Suivre la prod : `flyctl status`, `flyctl logs` ; prochaine action
+   Fly seulement sur demande explicite (secrets SMTP par exemple).

@@ -57,6 +57,19 @@ Décisions prises et raisons :
    `NiceGUI ready`, port 8080) ; smoke HTTP `/`, `/login`, `/site/DINUM`
    → 200 ; `_test_pco_ro.py` **PASS** (`TEST_PCO_OK`, exit 0 — EC32 :
    evt=16, evt_apres_sitrep=4, dernier SITREP n°2 du 12/11).
+4. **Routing par rôle vérifié (soir 13/11, après migration)** : la demande
+   « un utilisateur gestion de crise arrive directement sur les cellules
+   de crise, sans passer par les sites » est **déjà satisfaite** par
+   `default_tab = tab_crises if is_crisis_member else tab_sites`
+   (introduit en `caaa93d`). Vérifié en conditions réelles par
+   `_test_login_routing.py` (nouveau) : simulation NiceGUI du login ->
+   cockpit pour les 5 rôles, authentification stubée, BDD réelle en
+   lecture. Résultats : `CRISE_SG`/`CELLULE_CRISE` -> onglet
+   « Cellules de Crise » (onglet Sites non visible du tout) ;
+   `ADMIN`/`SUPERVISEUR_SG`/`OPERATEUR_SG` -> « Sites Sensibles » ;
+   non authentifié -> `/login`. `TEST_ROUTING_OK`. Aucune modification
+   de code nécessaire. Ce test servira de garde-fou de non-régression
+   pour le futur branchement direct « Cellules de Crise ».
 
 ---
 

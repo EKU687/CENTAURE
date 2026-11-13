@@ -22,11 +22,12 @@ migration Supabase appliquée ; voir § Déploiement du 13/11 )
 2. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
    cockpit (à la place des dialogues de gestion actuels).
 3. **Main Courante terrain** (`app/ui/site_agent.py`).
-4. **Rotation du mot de passe applicatif Gmail (SMTP)** si non faite côté
+4. **Révoquer le mot de passe applicatif Gmail (SMTP)** si non fait côté
    Google — l'ancien est exposé via l'historique GitHub public
-   (voir § Sécurité). Puis mise à jour de `.env` et ajout des secrets
-   SMTP/BREVO sur Fly si la diffusion e-mail des SITREP doit marcher en
-   ligne (`flyctl secrets set SMTP_PASSWORD=... BREVO_API_KEY=......`).
+   (voir § Sécurité). Il n'est **plus utilisé par l'application**
+   (messagerie basculée sur l'API REST Brevo) mais reste valable pour le
+   compte Google lui-même : à révoquer par hygiène. Les sections SMTP du
+   `.env` sont vestigiales — nettoyage à planifier.
 5. **Brancher l'écran physique de la salle PCO** sur
    `https://gnc-centaure.fly.dev/wall?token=<jeton kiosque>` (F11 +
    armement du son), via le bouton « Écran mural » du cockpit pour copier
@@ -153,9 +154,13 @@ Page `/wall` de supervision globale, en remplacement du MODE COS supprimé :
 - **Retiré du suivi git** : `.streamlit/secrets.toml` contenait le mot de
   passe applicatif SMTP et était **poussé sur le dépôt GitHub public**
   (repo `EKU687/CENTAURE`). Le fichier est retiré de l'index (reste local,
-  ignoré) et poussé ; **l'historique GitHub le conserve** — la rotation du
-  mot de passe côté Google reste la protection décisionnelle (point 4 de
-  la checklist).
+  ignoré) et poussé ; **l'historique GitHub le conserve** — à révoquer
+  côté Google par hygiène (l'app n'envoie plus via Gmail).
+- **Messagerie = Brevo** (API REST port 443, clé `BREVO_API_KEY`
+  `xkeysib-...`, jamais dans git) : secrets `BREVO_API_KEY` et
+  `SENDER_EMAIL` posés sur Fly le 13/11 soir → la diffusion e-mail des
+  SITREP est armée en PROD (recette d'envoi réel à faire avec le
+  prochain SITREP : bouton « DIFFUSER AU SG (EMAIL) »).
 
 ---
 

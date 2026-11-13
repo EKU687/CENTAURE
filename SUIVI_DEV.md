@@ -3,7 +3,10 @@
 **Dernière mise à jour :** 13/11/2026 soir (fin) — COS + MIGRATION + ÉCRAN MURAL
 + **DÉPLOIEMENT FLY.IO RÉALISÉ** (Mode: PRODUCTION, recette en ligne OK)
 **Branche :** `main` — refonte PCO + fin COS + écran mural **committés et
-poussés** ( Serveur DEV local éteint recommandé au prochain arrêt ;
+poussés** ( **Serveur DEV local ARRÊTÉ proprement le 13/11 au soir** —
+relance à la prochaine séance :
+`cd C:\Dev\CENTAURE && .venv\Scripts\python.exe -u main.py`,
+fenêtre dédiée, `PYTHONUNBUFFERED=1` si redirigé ;
 migration Supabase appliquée ; voir § Déploiement du 13/11 )
 
 ---

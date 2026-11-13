@@ -70,6 +70,11 @@ Décisions prises et raisons :
    non authentifié -> `/login`. `TEST_ROUTING_OK`. Aucune modification
    de code nécessaire. Ce test servira de garde-fou de non-régression
    pour le futur branchement direct « Cellules de Crise ».
+   **Recette navigateur utilisateur (13/11 soir) : VALIDÉE** — le
+   superviseur voit Sites + Crises + Journal des alertes ; l'opérateur
+   voit les sites uniquement (et peut modifier les niveaux — constaté
+   conforme) ; le gestionnaire de crise arrive directement sur les
+   cellules de crise.
 
 ---
 

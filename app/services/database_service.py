@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Tuple
 
-from app.services.supabase_client import supabase
+from app.services.supabase_client import supabase, run_supabase
 from app.models.site import SiteCritique, AnomalieTechnique
 from app.models.crise import CriseStrategique
 
@@ -367,12 +367,13 @@ class DatabaseService:
     def get_active_crises() -> List[Dict[str, Any]]:
         """Récupère toutes les crises actives."""
         try:
-            res = (
-                supabase.table("centaure_crises")
+            res = run_supabase(
+                lambda: supabase.table("centaure_crises")
                 .select("*")
                 .in_("statut", ["ACTIVEE", "EN_SOMMEIL"])
                 .order("created_at", desc=True)
-                .execute()
+                .execute(),
+                "lecture crises actives",
             )
             return res.data or []
         except Exception as e:
@@ -383,11 +384,12 @@ class DatabaseService:
     def get_crise_by_id(crise_id: str) -> Optional[Dict[str, Any]]:
         """Récupère une crise par son UUID."""
         try:
-            res = (
-                supabase.table("centaure_crises")
+            res = run_supabase(
+                lambda: supabase.table("centaure_crises")
                 .select("*")
                 .eq("id", str(crise_id))
-                .execute()
+                .execute(),
+                "lecture crise par ID",
             )
             return res.data[0] if res.data else None
         except Exception as e:
@@ -413,6 +415,7 @@ class DatabaseService:
         description: Optional[str] = None,
         lieu_pc: Optional[str] = None,
         statut: Optional[str] = None,
+        activated_at: Optional[str] = None,
     ) -> bool:
         """Mise à jour des informations de crise."""
         try:
@@ -429,13 +432,19 @@ class DatabaseService:
                 payload["lieu_pc"] = lieu_pc.strip()
             if statut is not None:
                 payload["statut"] = statut.strip()
+            if activated_at is not None:
+                payload["activated_at"] = activated_at
 
             if not payload:
                 return True
 
-            supabase.table("centaure_crises").update(payload).eq(
-                "id", str(crise_id)
-            ).execute()
+            run_supabase(
+                lambda: supabase.table("centaure_crises")
+                .update(payload)
+                .eq("id", str(crise_id))
+                .execute(),
+                "mise à jour crise",
+            )
             return True
         except Exception as e:
             print(f"❌ Échec modification crise : {e}")
@@ -471,12 +480,13 @@ class DatabaseService:
     def get_main_courante_by_crise(crise_id: str) -> List[Dict[str, Any]]:
         """Récupère les événements de la main courante triés par horodatage inverse."""
         try:
-            res = (
-                supabase.table("centaure_main_courante")
+            res = run_supabase(
+                lambda: supabase.table("centaure_main_courante")
                 .select("*")
                 .eq("crise_id", str(crise_id))
                 .order("horodatage", desc=True)
-                .execute()
+                .execute(),
+                "lecture main courante",
             )
             return res.data or []
         except Exception as e:
@@ -519,7 +529,10 @@ class DatabaseService:
         }
 
         try:
-            res = supabase.table("centaure_main_courante").insert(payload).execute()
+            res = run_supabase(
+                lambda: supabase.table("centaure_main_courante").insert(payload).execute(),
+                "insertion main courante",
+            )
             if res.data:
                 print(
                     f"📜 [MAIN COURANTE] Log inséré avec succès ID: {res.data[0].get('id')} | SITREP: {is_sitrep}"
@@ -534,9 +547,13 @@ class DatabaseService:
     def toggle_sitrep_main_courante(log_id: str, new_status: bool) -> bool:
         """Active ou désactive l'inclusion d'un log au SITREP SG."""
         try:
-            supabase.table("centaure_main_courante").update(
-                {"is_sitrep": new_status}
-            ).eq("id", str(log_id)).execute()
+            run_supabase(
+                lambda: supabase.table("centaure_main_courante")
+                .update({"is_sitrep": new_status})
+                .eq("id", str(log_id))
+                .execute(),
+                "bascule SITREP main courante",
+            )
             return True
         except Exception as e:
             print(f"❌ Erreur toggle_sitrep_main_courante : {e}")
@@ -546,9 +563,13 @@ class DatabaseService:
     def update_statut_information(log_id: str, nouveau_statut: str) -> bool:
         """Met à jour le champ statut_info d'une entrée."""
         try:
-            supabase.table("centaure_main_courante").update(
-                {"statut_info": str(nouveau_statut).upper()}
-            ).eq("id", str(log_id)).execute()
+            run_supabase(
+                lambda: supabase.table("centaure_main_courante")
+                .update({"statut_info": str(nouveau_statut).upper()})
+                .eq("id", str(log_id))
+                .execute(),
+                "mise à jour statut_info",
+            )
             return True
         except Exception as e:
             print(f"❌ Erreur mise à jour statut_info : {e}")
@@ -614,11 +635,12 @@ class DatabaseService:
     def get_membres_crise(crise_id: str) -> List[Dict[str, Any]]:
         """Récupère les membres affectés à une crise."""
         try:
-            res = (
-                supabase.table("centaure_crise_membres")
+            res = run_supabase(
+                lambda: supabase.table("centaure_crise_membres")
                 .select("id, fonction_crise, centaure_annuaire(*)")
                 .eq("crise_id", str(crise_id))
-                .execute()
+                .execute(),
+                "lecture membres cellule",
             )
             return res.data or []
         except Exception as e:

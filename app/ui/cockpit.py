@@ -8,8 +8,7 @@ import app.ui.crises as crises_ui
 import app.ui.annuaire_ui as annuaire_ui
 import app.ui.users_ui as users_ui
 
-# État global pour le mode COS et le rafraîchissement automatique
-cos_mode = False
+# État global pour le rafraîchissement automatique
 current_sites = []
 dialog_open = False  # Flag pour désactiver le polling quand un dialogue est ouvert
 site_cards_map = {}  # Mapping site_code -> ui.card pour les mises à jour incrémentales
@@ -483,7 +482,7 @@ async def create_cockpit_page():
                 ui.label(config.APP_NAME).classes(
                     "text-xl font-bold tracking-widest text-red-500"
                 )
-                ui.label("| SG").classes("text-xs text-slate-400 font-medium")
+                ui.label("| GNC").classes("text-xs text-slate-400 font-medium")
 
                 ui.badge(config.DISPLAY_VERSION, color="slate-800").classes(
                     "text-[10px] font-mono border border-slate-700 text-slate-300 px-2 py-0.5 ml-1"
@@ -626,33 +625,13 @@ async def create_cockpit_page():
 
                 update_kpi_banner()
 
-                def toggle_cos_mode():
-                    global cos_mode
-                    cos_mode = not cos_mode
-                    render_sites_grid(search_input.value)
-                    ui.notify(
-                        f"Mode COS {'activé' if cos_mode else 'désactivé'}", type="info"
-                    )
+                sites_grid_classes = "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 w-full"
 
-                with ui.row().classes("w-full justify-end mb-4"):
-                    ui.button(
-                        f"Mode COS : {'ACTIF' if cos_mode else 'INACTIF'}",
-                        icon="monitor",
-                        on_click=toggle_cos_mode,
-                    ).props(f"color={'blue' if cos_mode else 'grey'} sm font-bold")
-
-                def get_grid_classes():
-                    return (
-                        "grid-cols-2 lg:grid-cols-4 xl:grid-cols-6"
-                        if cos_mode
-                        else "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                    )
-
-                sites_grid = ui.grid().classes(f"{get_grid_classes()} gap-6 w-full")
+                sites_grid = ui.grid().classes(sites_grid_classes)
 
                 def render_sites_grid(filter_text=""):
                     sites_grid.clear()
-                    sites_grid.classes(f"{get_grid_classes()} gap-6 w-full")
+                    sites_grid.classes(sites_grid_classes)
                     with sites_grid:
                         for site in current_sites:
                             if (

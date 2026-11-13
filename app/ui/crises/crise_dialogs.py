@@ -32,6 +32,14 @@ async def activer_et_notifier_crise(
             ui.notify("❌ Échec de la mise à jour du statut en BDD.", type="negative")
             return
 
+        # Horodatage d'activation pour le chrono PCO (mise à jour silencieuse :
+        # la colonne peut être absente tant que la migration PCO n'est pas appliquée).
+        await asyncio.to_thread(
+            DatabaseService.update_crise,
+            crise_id=crise_id,
+            activated_at=datetime.now(LOCAL_TZ).isoformat(),
+        )
+
         await asyncio.to_thread(
             DatabaseService.consigner_main_courante,
             crise_id=crise_id,

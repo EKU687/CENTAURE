@@ -47,6 +47,27 @@ def reset_supabase_client() -> Client:
     return _supabase_instance
 
 
+def run_supabase(query_fn, context: str = "requête Supabase"):
+    """Exécute une requête PostgREST avec une unique reprise après
+    réinitialisation de la session HTTP.
+
+    Les liaisons HTTP vers Supabase sont parfois rompues à l'inattendu
+    (`Server disconnected` / `UNEXPECTED_EOF_WHILE_READING`) : sans reprise,
+    l'appelant ne voit qu'un résultat vide (ex. journal d'événements
+    apparemment vide alors que la donnée est bien en base).
+    """
+    try:
+        return query_fn()
+    except Exception:
+        logger.warning(
+            "🔄 %s : session HTTP interrompue — réinitialisation et reprise...",
+            context,
+            exc_info=True,
+        )
+        reset_supabase_client()
+        return query_fn()
+
+
 # Proxy de compatibilité pour le code existant important directement `supabase`
 class SupabaseProxy:
     def __getattr__(self, name):

@@ -4,6 +4,16 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Force la sortie en UTF-8 : sur console Windows (cp1252/cp850), un simple
+# print() contenant un emoji (✅/❌) lève une UnicodeEncodeError qui fait
+# planter le rendu des pages (HTTP 500). Sous Docker (PROD), l'UTF-8 étant
+# déjà actif, ce reparamétrage est sans effet.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Charge le fichier .env dès le démarrage
 load_dotenv()
 

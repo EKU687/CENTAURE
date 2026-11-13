@@ -10,7 +10,7 @@ from app.ui.crises.sitrep_dialog import SitrepService
 LOCAL_TZ = ZoneInfo("Pacific/Noumea")
 
 
-def open_main_courante_dialog(crise):
+async def open_main_courante_dialog(crise):
     """Journal de bord de crise avec fenêtre de génération SITREP enrichie."""
     crise_id = None
     if isinstance(crise, str):
@@ -35,16 +35,27 @@ def open_main_courante_dialog(crise):
         )
         return
 
-    directions_db = DatabaseService.get_all_directions() or []
+    directions_db = await asyncio.to_thread(DatabaseService.get_all_directions) or []
     options_directions = ["TOUTES / GÉNÉRAL"] + directions_db
 
+    # Lecture initiale AVANT toute construction d'élément : le dialogue est
+    # ensuite bâti de façon 100 % synchrone (contrairement au clear+recréation
+    # asynchrone qui déclenchait côté client des re-rendus auto-destructeurs :
+    # « Event listeners changed after initial definition », ancres orphelines).
+    logs_initiaux = await asyncio.to_thread(
+        DatabaseService.get_main_courante_by_crise, crise_id
+    ) or []
+
     with ui.dialog() as dialog, ui.card().classes(
-        "w-full max-w-5xl bg-slate-900 border border-red-800 text-slate-100 p-6 h-[85vh] flex flex-col justify-start gap-4 overflow-hidden"
+        "w-full max-w-5xl bg-slate-900 border border-red-800 text-slate-100 p-6"
+    ).style(
+        "display: flex; flex-direction: column; justify-content: flex-start; "
+        "gap: 1rem; max-height: 85vh; overflow: hidden"
     ):
         # 1. En-tête
         with ui.row().classes(
-            "justify-between items-center w-full border-b border-red-900/60 pb-3 flex-none"
-        ):
+            "justify-between items-center w-full border-b border-red-900/60 pb-3"
+        ).style("flex: none"):
             with ui.row().classes("items-center gap-3"):
                 ui.icon("assignment", color="red-5", size="md")
                 with ui.column().classes("gap-0"):
@@ -56,8 +67,8 @@ def open_main_courante_dialog(crise):
 
         # 2. Formulaire de consignation
         with ui.column().classes(
-            "w-full bg-slate-800/90 p-3 rounded border border-slate-700 flex-none gap-3"
-        ):
+            "w-full bg-slate-800/90 p-3 rounded border border-slate-700 gap-3"
+        ).style("flex: none"):
             ui.label("Consigner une directive ou un événement au journal").classes(
                 "text-xs font-bold text-slate-300 tracking-wider"
             )
@@ -113,14 +124,16 @@ def open_main_courante_dialog(crise):
 
         # 3. Barre d'actions
         with ui.row().classes(
-            "w-full items-center justify-between gap-2 bg-slate-950/60 p-2 rounded border border-slate-800 flex-none"
-        ):
+            "w-full items-center justify-between gap-2 bg-slate-950/60 p-2 rounded border border-slate-800"
+        ).style("flex: none"):
             ui.label("Journal des événements").classes(
                 "text-xs font-bold text-slate-400 uppercase tracking-wider"
             )
 
-            def generate_sitrep_from_flagged_logs():
-                logs = DatabaseService.get_main_courante_by_crise(crise_id) or []
+            async def generate_sitrep_from_flagged_logs():
+                logs = await asyncio.to_thread(
+                    DatabaseService.get_main_courante_by_crise, crise_id
+                ) or []
                 sitrep_logs = [l for l in logs if l.get("is_sitrep") is True]
 
                 if not sitrep_logs:
@@ -216,8 +229,10 @@ def open_main_courante_dialog(crise):
                     on_click=generate_sitrep_from_flagged_logs,
                 ).props("color=blue sm font-bold")
 
-                def trigger_export():
-                    logs = DatabaseService.get_main_courante_by_crise(crise_id) or []
+                async def trigger_export():
+                    logs = await asyncio.to_thread(
+                        DatabaseService.get_main_courante_by_crise, crise_id
+                    ) or []
                     if not logs:
                         ui.notify("Aucun événement à exporter.", type="warning")
                         return
@@ -233,21 +248,24 @@ def open_main_courante_dialog(crise):
 
         # 4. Zone d'affichage direct des cartes
         journal_container = ui.column().classes(
-            "w-full h-[320px] overflow-y-auto gap-2 pr-2 border border-slate-800 bg-slate-950/60 p-3 rounded"
+            "w-full gap-2 pr-2 border border-slate-800 bg-slate-950/60 p-3 rounded"
+        ).style(
+            "flex: 1 1 0%; min-height: 180px; max-height: 420px; overflow-y: auto"
         )
 
-        def display_cards():
-            journal_container.clear()
-            logs = DatabaseService.get_main_courante_by_crise(crise_id) or []
-
+        @ui.refreshable
+        def render_journal(evenements):
+            """Rendu du journal via le mécanisme refreshable de NiceGUI :
+            reconstruction propre (suppression réelle des anciens éléments,
+            listeners et ancres gérés par le framework)."""
             with journal_container:
-                if not logs:
+                if not evenements:
                     ui.label("⚠️ Aucun événement en BDD pour cette crise.").classes(
                         "text-amber-400 italic text-sm p-4 text-center w-full"
                     )
                     return
 
-                for evt in logs:
+                for evt in evenements:
                     log_id = str(evt.get("id") or "")
                     cat_item = str(evt.get("categorie") or "INFO").upper()
                     prio_raw = str(evt.get("niveau_priorite") or "NORMALE").upper()
@@ -283,19 +301,26 @@ def open_main_courante_dialog(crise):
                     )
 
                     def make_handler(target_id=log_id, current_val=is_sitrep_flag):
-                        def handler():
+                        async def handle_toggle():
                             new_state = not current_val
-                            ok = DatabaseService.toggle_sitrep_main_courante(
-                                target_id, new_state
+                            ok = await asyncio.to_thread(
+                                DatabaseService.toggle_sitrep_main_courante,
+                                target_id,
+                                new_state,
                             )
                             if ok:
                                 ui.notify(
                                     f"{'📌 Ajouté au' if new_state else '⚪ Retiré du'} SITREP SG",
                                     type="positive" if new_state else "info",
                                 )
-                                display_cards()
+                                # Le rafraîchissement partiel d'un dialogue
+                                # déjà ouvert passe par le re-render client
+                                # (peu fiable) : on rouvre le dialogue au
+                                # complet avec un journal à jour.
+                                dialog.close()
+                                await open_main_courante_dialog(crise)
 
-                        return handler
+                        return handle_toggle
 
                     with ui.card().classes(
                         f"w-full bg-slate-800/80 border {card_border} p-3 text-xs flex-none"
@@ -346,7 +371,7 @@ def open_main_courante_dialog(crise):
                             "text-sm text-slate-100 font-sans mt-1 whitespace-pre-line"
                         )
 
-        def handle_submit():
+        async def handle_submit():
             texte = input_desc.value
             if not texte or not str(texte).strip():
                 ui.notify(
@@ -363,7 +388,8 @@ def open_main_courante_dialog(crise):
             )
             current_author = app.storage.user.get("nom_complet", "Opérateur SG")
 
-            ok = DatabaseService.consigner_main_courante(
+            ok = await asyncio.to_thread(
+                DatabaseService.consigner_main_courante,
                 crise_id=crise_id,
                 description=str(texte).strip(),
                 categorie=select_cat.value,
@@ -376,13 +402,19 @@ def open_main_courante_dialog(crise):
 
             if ok:
                 ui.notify("Événement consigné !", type="positive")
-                input_desc.set_value("")
-                checkbox_sitrep.set_value(False)
-                display_cards()
+                # Le rafraîchissement partiel d'un dialogue déjà ouvert passe
+                # par le re-render client (peu fiable) : on rouvre le
+                # dialogue au complet, journal à jour, nouvel evt en tête.
+                dialog.close()
+                await open_main_courante_dialog(crise)
             else:
                 ui.notify("Échec de la consignation dans Supabase.", type="negative")
 
         btn_send.on_click(handle_submit)
-        display_cards()
+        render_journal(logs_initiaux)
 
+    # Anti-accumulation : chaque ouverture crée un dialogue neuf ; on le
+    # retire du DOM quand il se referme, sinon les ouvertures successives
+    # empilent dialogues, formulaires et handlers sur la page cliente.
+    dialog.on("hide", dialog.delete)
     dialog.open()

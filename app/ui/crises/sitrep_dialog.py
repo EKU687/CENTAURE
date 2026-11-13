@@ -1,14 +1,24 @@
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Any
+from typing import Any, Optional
 
 from nicegui import app, ui
 from app.services.database_service import DatabaseService
 from app.services.notification_service import NotificationService
-from app.services.supabase_client import supabase
+from app.services.supabase_client import supabase, run_supabase
 
 LOCAL_TZ = ZoneInfo("Pacific/Noumea")
+
+
+def _parse_dt(raw: Any) -> Optional[datetime]:
+    """Convertit un horodatage ISO en datetime conscient du fuseau."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 class SitrepService:
@@ -61,13 +71,14 @@ class SitrepService:
 
             next_num = 1
             try:
-                existing = (
-                    supabase.table("centaure_sitreps")
+                existing = run_supabase(
+                    lambda: supabase.table("centaure_sitreps")
                     .select("numero_sitrep")
                     .eq("crise_id", clean_crise_id)
                     .order("numero_sitrep", desc=True)
                     .limit(1)
-                    .execute()
+                    .execute(),
+                    "lecture dernier numero_sitrep",
                 )
                 if existing and existing.data and len(existing.data) > 0:
                     last_num = existing.data[0].get("numero_sitrep")
@@ -89,9 +100,23 @@ class SitrepService:
                     payload.get("prochaine_echeance") or ""
                 ).strip(),
                 "horodatage": datetime.now(LOCAL_TZ).isoformat(),
+                "type_sitrep": str(payload.get("type_sitrep") or "STANDARD").strip(),
             }
 
-            res = supabase.table("centaure_sitreps").insert(db_payload).execute()
+            try:
+                res = run_supabase(
+                    lambda: supabase.table("centaure_sitreps").insert(db_payload).execute(),
+                    "insertion SITREP",
+                )
+            except Exception as err_col:
+                # Colonne type_sitrep absente tant que la migration PCO n'est pas
+                # appliquée : on réinsère sans le typage.
+                print(f"⚠️ [SITREP SERVICE] Retry sans type_sitrep : {err_col}")
+                db_payload.pop("type_sitrep", None)
+                res = run_supabase(
+                    lambda: supabase.table("centaure_sitreps").insert(db_payload).execute(),
+                    "insertion SITREP (sans typage)",
+                )
             return bool(res and res.data)
 
         except Exception as err:
@@ -112,11 +137,12 @@ class SitrepService:
                     payload.get("prochaine_echeance") or ""
                 ).strip(),
             }
-            res = (
-                supabase.table("centaure_sitreps")
+            res = run_supabase(
+                lambda: supabase.table("centaure_sitreps")
                 .update(db_payload)
                 .eq("id", str(sitrep_id))
-                .execute()
+                .execute(),
+                "mise à jour SITREP",
             )
             return bool(res and res.data)
         except Exception as err:
@@ -127,17 +153,105 @@ class SitrepService:
     def get_sitreps_by_crise(crise_id: str) -> list[dict]:
         """Récupère l'historique des SITREPs d'une crise."""
         try:
-            res = (
-                supabase.table("centaure_sitreps")
+            res = run_supabase(
+                lambda: supabase.table("centaure_sitreps")
                 .select("*")
                 .eq("crise_id", str(crise_id))
                 .order("numero_sitrep", desc=True)
-                .execute()
+                .execute(),
+                "lecture historique SITREPs",
             )
             return res.data or []
         except Exception as err:
             print(f"❌ [SITREP SERVICE ERROR] {err}")
             return []
+
+    @staticmethod
+    def get_last_sitrep_by_crise(crise_id: str) -> Optional[dict]:
+        """Récupère le dernier SITREP émis pour une crise (suivi PCO)."""
+        try:
+            res = run_supabase(
+                lambda: supabase.table("centaure_sitreps")
+                .select("*")
+                .eq("crise_id", str(crise_id))
+                .order("numero_sitrep", desc=True)
+                .limit(1)
+                .execute(),
+                "lecture dernier SITREP",
+            )
+            return res.data[0] if res and res.data else None
+        except Exception as err:
+            print(f"❌ [SITREP SERVICE ERROR] {err}")
+            return None
+
+    @staticmethod
+    def generate_fin_de_journee_summary(crise_id: str) -> dict:
+        """Agrège les événements consignés depuis minuit (heure locale NC) pour
+        construire le pré-remplissage du SITREP de fin de journée."""
+        debut_jour = datetime.now(LOCAL_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        sites = DatabaseService.get_all_sites() or []
+        sites_s4 = [
+            s.code_site for s in sites if getattr(s, "surete_niveau", "") == "S4"
+        ]
+        sites_s3 = [
+            s.code_site for s in sites if getattr(s, "surete_niveau", "") == "S3"
+        ]
+
+        logs = DatabaseService.get_main_courante_by_crise(crise_id) or []
+        logs_du_jour = []
+        for log in logs:
+            dt_log = _parse_dt(log.get("horodatage") or log.get("created_at"))
+            if dt_log is not None and dt_log >= debut_jour:
+                logs_du_jour.append(log)
+
+        def _fmt(log) -> str:
+            dt_log = _parse_dt(log.get("horodatage") or log.get("created_at"))
+            heure = dt_log.strftime("%Hh%M") if dt_log else "?"
+            return (
+                f"[{heure}] [{log.get('categorie', 'INFO')}] "
+                f"{log.get('description', '')}"
+            )
+
+        decisions = [l for l in logs_du_jour if l.get("categorie") == "DECISION"]
+        alertes = [
+            l for l in logs_du_jour
+            if l.get("categorie") == "ALERTE"
+            or str(l.get("niveau_priorite", "")).upper() == "CRITIQUE"
+        ]
+        ordres = [l for l in logs_du_jour if l.get("categorie") == "ORDRE"]
+        flagges_sitrep = [l for l in logs_du_jour if l.get("is_sitrep") is True]
+
+        len_dec = len(decisions)
+        len_al = len(alertes)
+        synthese_lignes = [
+            f"Consignation de la journée ({datetime.now(LOCAL_TZ).strftime('%d/%m/%Y')}) :",
+            f"- {len(logs_du_jour)} événement(s) consigné(s) à la main courante, "
+            f"dont {len_dec} décision(s) et {len_al} alerte(s)/élément(s) critique(s).",
+        ]
+        if ordres:
+            synthese_lignes.append(f"- {len(ordres)} ordre(s)/directive(s) diffusé(s).")
+        for l in flagges_sitrep or logs_du_jour:
+            synthese_lignes.append(_fmt(l))
+
+        return {
+            "postures": {
+                "sites_s4": sites_s4,
+                "sites_s3": sites_s3,
+            },
+            "nb_evt_jour": len(logs_du_jour),
+            "nb_decisions": len_dec,
+            "nb_alertes": len_al,
+            "nb_ordres": len(ordres),
+            "synthese_preremplie": "\n".join(synthese_lignes),
+            "actions_preremplie": (
+                "\n".join(f"• {_fmt(d)}" for d in decisions)
+                if decisions
+                else "Aucune décision formelle consignée aujourd'hui."
+            ),
+        }
 
 
 def open_sitrep_dialog(crise: Any):

@@ -209,6 +209,8 @@ Tests (17/11) :
   000) ; à relancer pour la prochaine recette locale.
 - Scripts `_test_*.py` laissés **non commités** (outils de vérification
   read-only jetables).
+- **Décision 17/11 soir (validation utilisateur)** : la **v34 en PROD a été
+  vérifiée par l'utilisateur → on la garde** (pas de rollback vers la v33).
 
 ---
 

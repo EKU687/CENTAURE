@@ -1,8 +1,7 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 17/11/2026 — FINALISATION AVANT PROD (points 0a/0b/0c,
-pièces jointes par crise + bouton 📎 déplacé sur la carte crise — voir
-§ Séance du 17/11)
+**Dernière mise à jour :** 17/11/2026 soir — push GitHub + déploiement PROD
+Fly.io v34 effectués et recette en ligne OK (voir § Séance du 17/11, suite 3)
 **Branche :** `main` — refonte PCO + fin COS + écran mural **committés et
 poussés** ( **Serveur DEV local ARRÊTÉ proprement le 14/11 au soir** — port
 8080 libéré (curl → 000) ; relance demain :
@@ -182,23 +181,34 @@ Tests (17/11) :
 - Recette navigateur du **nouveau bouton 📎** sur la carte crise : à refaire
   côté utilisateur sur `localhost:8080`.
 
-### 17/11 (suite 3) — Commit local (push + deploy PROD en attente)
+### 17/11 (suite 3) — Commit local + push GitHub + déploiement PROD Fly.io (17/11 soir, depuis le domicile)
 
-**Commit local effectué le 17/11** — push GitHub et déploiement Fly.io
-volontairement **non faits** (à réaliser depuis le domicile ; le réseau du
-bureau ne passe pas). Contenu du commit :
-- points 0a/0b/0c : SITREP en **PDF joint** à l'e-mail Brevo
-  (`pdf_service.py`, zéro dépendance), phrase de convocation conditionnelle
-  (gravité ≥ 3), archivage/suppression de crise avec **refresh de l'onglet
-  sans rechargement** ;
-- **pièces jointes par crise** : bucket privé + table + service + dialogue
-  dédié, bouton 📎 sur la carte crise ;
-- migrations SQL `migration_categories.sql`, `migration_fonctions_crise.sql`,
-  `migration_fichiers_crise.sql` (**appliquées côté Supabase le 17/11**) ;
-- refonte PCO du 14/11 (main courante, site agent, cockpit).
-
-Scripts `_test_*.py` laissés **non commités** (outils de vérification
-read-only jetables).
+- **Commit local `4ab733b`** (12 fichiers, +1837/−103) : points 0a/0b/0c
+  (SITREP en **PDF joint** à l'e-mail Brevo via `pdf_service.py`, phrase de
+  convocation conditionnelle gravité ≥ 3, archivage/suppression de crise avec
+  **refresh de l'onglet sans rechargement**), **pièces jointes par crise**
+  (bucket privé + table + service + dialogue dédié, bouton 📎 sur la carte
+  crise), migrations SQL `migration_categories.sql` /
+  `migration_fonctions_crise.sql` / `migration_fichiers_crise.sql`
+  (**appliquées côté Supabase le 17/11**), refonte PCO du 14/11.
+- **Push `origin main` effectué le 17/11 soir** (avec les 2 commits docs
+  `d0d3ac3`, `4f28fbb`) — `git log origin/main..main` vide après push.
+- **Déploiement PROD Fly.io effectué le 17/11 ~06:57 UTC** :
+  `flyctl deploy --remote-only -a gnc-centaure` → exit 0 ; machine
+  `784756dc5e3758` passée en **version 34**, état `started`, health check
+  passing, image `gnc-centaure:deployment-01M7M4NPV8G7A2R5G95JR2AHAA`.
+  (flyctl auto-upgradé 0.5.3 → 0.5.11 pendant l'opération ; 1ʳᵉ tentative
+  bloquée sur le remplacement du binaire, relancée avec la v0.5.11.)
+- **Recette en ligne** sur https://gnc-centaure.fly.dev : `/`, `/login`,
+  `/kiosk`, `/wall`, `/kiosk?token=invalide`, `/wall?token=<DINUM>`,
+  `/kiosk?token=<DINUM>`, `/site/DINUM` → **8/8 en 200**. Logs prod :
+  « CENTAURE Démarré | Mode: PRODUCTION | Port: 8080 », health check passing
+  après 3 s, kiosk DINUM accordé, écran mural accordé, token invalide rejeté
+  proprement (22P02 géré).
+- Serveur DEV local **arrêté proprement** avant le déploiement (port 8080 →
+  000) ; à relancer pour la prochaine recette locale.
+- Scripts `_test_*.py` laissés **non commités** (outils de vérification
+  read-only jetables).
 
 ---
 

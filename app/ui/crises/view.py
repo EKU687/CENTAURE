@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from nicegui import ui
+from nicegui import app, ui
 from app.services.database_service import DatabaseService
 from app.ui.crises.sitrep_dialog import SitrepService, open_sitrep_dialog
 from app.ui.crises.main_courante_dialog import open_main_courante_dialog
@@ -10,6 +10,7 @@ from app.ui.crises.crise_dialogs import (
     activer_et_notifier_crise,
     open_new_crise_dialog,
     open_edit_crise_dialog,
+    open_fichiers_crise_dialog,
 )
 from app.ui.crises.fin_de_journee_dialog import open_fin_de_journee_dialog
 
@@ -109,6 +110,23 @@ def _charger_suivi_cellule(crise_id: str) -> dict:
 
 async def render_crises_view(is_sg_admin: bool = False):
     """Vue Poste de Commandement Opérationnel (PCO) — pilotage multi-cellules."""
+
+    # Site dont la carte du cockpit a déclenché le branchement direct :
+    # la cellule liée à ce site (site_impacte_id) est mise en évidence.
+    try:
+        focus_site_id = str(app.storage.client.get("crise_focus_site_id") or "")
+    except Exception:
+        focus_site_id = ""
+
+    # Map id site -> code pour afficher le rattachement de chaque cellule.
+    sites_map = {}
+    try:
+        for s in await asyncio.to_thread(DatabaseService.get_all_sites) or []:
+            sid = getattr(s, "id", None)
+            if sid:
+                sites_map[str(sid)] = s.code_site
+    except Exception as err:
+        print(f"⚠️ Erreur chargement map sites : {err}")
     with ui.row().classes("items-center justify-between w-full mb-4 flex-wrap"):
         with ui.column().classes("gap-0"):
             ui.label("PCO — Poste de Commandement Opérationnel").classes(
@@ -196,7 +214,14 @@ async def render_crises_view(is_sg_admin: bool = False):
             else "bg-red-950/30 border-red-800/80"
         )
 
-        with ui.card().classes(f"w-full {card_bg} border p-5 shadow-lg mb-4 gap-3"):
+        crise_site_id = str(crise.get("site_impacte_id") or "")
+        is_focus = bool(focus_site_id) and crise_site_id == focus_site_id
+        card_classes = f"w-full {card_bg} border p-5 shadow-lg mb-4 gap-3"
+        if is_focus:
+            card_classes += " crise-focus-ring"
+        with ui.card().classes(card_classes) as crise_card:
+            # Ancre pour le branchement direct depuis la carte site du cockpit.
+            crise_card.props(f'data-crise-site="{crise_site_id}"')
             with ui.row().classes("justify-between items-start w-full flex-wrap gap-2"):
                 with ui.column().classes("gap-1"):
                     with ui.row().classes("items-center gap-3 flex-wrap"):
@@ -211,6 +236,15 @@ async def render_crises_view(is_sg_admin: bool = False):
                             "font-bold"
                         )
                         ui.badge(c_type, color="grey-8").classes("text-[10px]")
+                        site_lie = sites_map.get(str(crise.get("site_impacte_id") or ""))
+                        if site_lie:
+                            ui.badge(f"🏢 {site_lie}", color="blue-9").classes(
+                                "font-bold text-[10px]"
+                            ).tooltip(f"Crise de niveau site — rattachée à {site_lie}")
+                        else:
+                            ui.badge("🌍 Nationale", color="grey-8").classes(
+                                "text-[10px]"
+                            ).tooltip("Crise nationale — aucun site rattaché")
                         if c_statut == "EN_SOMMEIL":
                             ui.badge("EN SOMMEIL", color="warning").classes(
                                 "font-bold animate-pulse"
@@ -309,6 +343,11 @@ async def render_crises_view(is_sg_admin: bool = False):
                     icon="assignment",
                     on_click=lambda c=crise: open_main_courante_dialog(c),
                 ).props("color=red sm font-bold")
+
+                ui.button(
+                    icon="attach_file",
+                    on_click=lambda c=crise: open_fichiers_crise_dialog(c),
+                ).props("color=amber sm font-bold").tooltip("Pièces jointes de la crise")
 
                 ui.button(
                     "SITREP",

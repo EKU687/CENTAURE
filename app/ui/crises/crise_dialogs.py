@@ -10,6 +10,22 @@ from app.services.notification_service import NotificationService
 LOCAL_TZ = ZoneInfo("Pacific/Noumea")
 
 
+async def _refresh_crises_tab_or_reload():
+    """Rafraîchit l'onglet « Cellules de Crise » sans recharger la page (on y
+    reste) ; repli sur ui.navigate.reload() si le handle de refresh est absent."""
+    refresh = None
+    try:
+        refresh = app.storage.client.get("refresh_crises_tab")
+    except Exception:
+        refresh = None
+    if callable(refresh):
+        result = refresh()
+        if asyncio.iscoroutine(result):
+            await result
+    else:
+        ui.navigate.reload()
+
+
 def generate_default_code_crise() -> str:
     """Génère un code de crise unique au format CRISE-YYYY-XXXX."""
     year = datetime.now(LOCAL_TZ).year
@@ -44,7 +60,7 @@ async def activer_et_notifier_crise(
             DatabaseService.consigner_main_courante,
             crise_id=crise_id,
             description=f"🚀 ACTIVATION DE LA CELLULE DE CRISE [{code_crise}] : {titre_crise}",
-            categorie="INITIALISATION",
+            categorie="ALERTE",
             auteur="PC CRISTAL",
             statut_info="CONFIRMEE",
         )
@@ -101,14 +117,24 @@ async def activer_et_notifier_crise(
         ui.notify(f"Erreur traitement : {e}", type="negative")
 
 
-def open_new_crise_dialog():
+async def open_new_crise_dialog():
     """Boîte de dialogue de déclaration d'une nouvelle Cellule de Crise SG."""
     default_code = generate_default_code_crise()
 
+    # Sélection du site impacté : crise « de niveau site » (site_impacte_id)
+    # ou crise nationale (aucun site).
+    sites_db = await asyncio.to_thread(DatabaseService.get_all_sites) or []
+    options_sites = {"": "🌍 Crise nationale — aucun site rattaché"}
+    for s in sites_db:
+        sid = str(getattr(s, "id", "") or "")
+        if sid:
+            options_sites[sid] = f"{s.code_site} — {s.nom}"
+
     with ui.dialog() as dialog, ui.card().classes(
-        "w-full max-w-lg max-h-[90vh] overflow-y-auto bg-slate-900 border border-red-700 text-slate-100 p-6 flex flex-col justify-between"
+        "w-full max-w-lg max-h-[90vh] bg-slate-900 border border-red-700 text-slate-100 p-6 flex flex-col"
     ):
-        with ui.column().classes("w-full gap-2"):
+        # Zone scrollable interne : la barre de boutons reste visible en bas.
+        with ui.column().classes("w-full gap-2 overflow-y-auto min-h-0 flex-1 pr-1"):
             ui.label("Déclarer une Nouvelle Cellule de Crise SG").classes(
                 "text-xl font-bold text-red-400 mb-2"
             )
@@ -150,6 +176,12 @@ def open_new_crise_dialog():
                 placeholder="Optionnel",
             ).classes("w-full")
 
+            select_site = ui.select(
+                options=options_sites,
+                value="",
+                label="Site impacté (crise de niveau site) — vide = crise nationale",
+            ).classes("w-full")
+
             input_desc = ui.textarea(label="Description synthétique").classes("w-full")
 
         async def save_crise():
@@ -180,6 +212,9 @@ def open_new_crise_dialog():
             if input_lieu.value and input_lieu.value.strip():
                 payload["lieu_pc"] = input_lieu.value.strip()
 
+            if select_site.value:
+                payload["site_impacte_id"] = str(select_site.value)
+
             new_crise = await asyncio.to_thread(DatabaseService.create_crise, payload)
 
             if new_crise:
@@ -187,7 +222,7 @@ def open_new_crise_dialog():
                     DatabaseService.consigner_main_courante,
                     crise_id=new_crise.get("id"),
                     description=f"🆕 CRÉATION DE LA CRISE [{payload['code_crise']}] — Posture : {payload['statut']}",
-                    categorie="INITIALISATION",
+                    categorie="INFORMATION",
                     auteur=declencheur,
                     statut_info="CONFIRMEE",
                 )
@@ -206,6 +241,277 @@ def open_new_crise_dialog():
                 "color=red font-bold"
             )
 
+    dialog.open()
+
+
+async def open_fichiers_crise_dialog(crise):
+    """Dialogue dédié aux pièces jointes d'une crise (upload / édition / suppression).
+
+    Ouvert depuis la carte crise (bouton 📎 à côté de Main Courante / SITREP)
+    et depuis le dialogue « Gérer la cellule ».
+    """
+    crise_id = str(
+        getattr(crise, "id", None)
+        or (crise.get("id") if isinstance(crise, dict) else "")
+    )
+    code_crise = str(
+        getattr(crise, "code_crise", None)
+        or (crise.get("code_crise") if isinstance(crise, dict) else "CRISE")
+    )
+
+    with ui.dialog() as dialog, ui.card().classes(
+        "w-[650px] max-w-full max-h-[90vh] overflow-y-auto bg-slate-900 border border-slate-700 text-slate-100 p-5"
+    ):
+        with ui.row().classes(
+            "justify-between items-center w-full border-b border-slate-700 pb-2 mb-3"
+        ):
+            with ui.row().classes("items-center gap-2 overflow-hidden"):
+                ui.icon("attach_file", color="amber-4", size="sm")
+                ui.label(f"Pièces jointes : {code_crise}").classes(
+                    "text-lg font-bold text-amber-300 truncate"
+                )
+            ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+
+        # Pièces jointes de la crise (upload / édition / suppression)
+        with ui.expansion(f"📎 Pièces jointes ({code_crise})", icon="attach_file", value=True).classes(
+            "w-full bg-slate-800/80 border border-slate-700 rounded mb-3"
+        ):
+            with ui.column().classes("p-3 gap-3 w-full"):
+                fichiers_container = ui.column().classes("w-full gap-1")
+
+                async def refresh_fichiers():
+                    fichiers_container.clear()
+                    fichiers = (
+                        await asyncio.to_thread(
+                            DatabaseService.get_fichiers_crise, crise_id
+                        )
+                        or []
+                    )
+                    with fichiers_container:
+                        if not fichiers:
+                            ui.label("Aucune pièce jointe pour cette cellule.").classes(
+                                "text-slate-400 italic text-xs p-1"
+                            )
+                            return
+                        for f in fichiers:
+                            fid = str(f.get("id", ""))
+                            nom = str(f.get("nom_fichier", "fichier"))
+                            mime = str(f.get("mime") or "")
+                            taille = f.get("taille_octets")
+                            commentaire = str(f.get("commentaire") or "")
+                            uploade = str(f.get("uploade_par") or "")
+                            cree_le = str(f.get("created_at") or "")[:16].replace("T", " ")
+
+                            def icone_mime(m=mime):
+                                if m.startswith("image/"):
+                                    return "image"
+                                if m == "application/pdf":
+                                    return "picture_as_pdf"
+                                if "word" in m or "document" in m:
+                                    return "description"
+                                if "excel" in m or "spreadsheet" in m:
+                                    return "table_chart"
+                                if "mail" in m or "rfc822" in m:
+                                    return "mail"
+                                if "zip" in m or "rar" in m:
+                                    return "archive"
+                                return "insert_drive_file"
+
+                            taille_txt = f"{int(taille) / 1024:.0f} Ko" if taille else ""
+
+                            async def telecharger(spath=str(f.get("storage_path") or "")):
+                                url = await asyncio.to_thread(
+                                    DatabaseService.url_signee_fichier_crise, spath
+                                )
+                                if url:
+                                    ui.run_javascript(
+                                        f"window.open({url!r}, '_blank')"
+                                    )
+                                else:
+                                    ui.notify(
+                                        "Lien de téléchargement indisponible.",
+                                        type="negative",
+                                    )
+
+                            async def modifier_f(
+                                fid=fid, nom_actuel=nom, com_actuel=commentaire
+                            ):
+                                with ui.dialog() as dlg, ui.card().classes(
+                                    "bg-slate-900 border border-slate-700 text-slate-100 p-5 w-[420px] max-w-full"
+                                ):
+                                    ui.label("Modifier la pièce jointe").classes(
+                                        "text-base font-bold text-blue-300 mb-2"
+                                    )
+                                    inp_nom = ui.input(
+                                        label="Nom affiché", value=nom_actuel
+                                    ).classes("w-full")
+                                    inp_com = ui.input(
+                                        label="Commentaire", value=com_actuel
+                                    ).classes("w-full")
+
+                                    async def valider_modif():
+                                        ok = await asyncio.to_thread(
+                                            DatabaseService.update_fichier_crise,
+                                            fid,
+                                            inp_nom.value,
+                                            inp_com.value,
+                                        )
+                                        if ok:
+                                            ui.notify(
+                                                "Pièce jointe mise à jour.",
+                                                type="positive",
+                                            )
+                                            dlg.close()
+                                            await refresh_fichiers()
+                                        else:
+                                            ui.notify(
+                                                "Erreur de mise à jour.",
+                                                type="negative",
+                                            )
+
+                                    with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                                        ui.button("Annuler", on_click=dlg.close).props(
+                                            "flat color=grey"
+                                        )
+                                        ui.button(
+                                            "Enregistrer",
+                                            icon="save",
+                                            on_click=valider_modif,
+                                        ).props("color=blue sm font-bold")
+                                dlg.open()
+
+                            async def supprimer_f(fid=fid, nom_f=nom):
+                                with ui.dialog() as dlg, ui.card().classes(
+                                    "bg-slate-900 border border-red-800 text-white p-5"
+                                ):
+                                    ui.label(
+                                        f"Supprimer « {nom_f} » ?"
+                                    ).classes("text-base font-bold text-red-400 mb-2")
+                                    ui.label(
+                                        "Le fichier sera supprimé définitivement"
+                                        " (stockage + fiche)."
+                                    ).classes("text-xs text-slate-400")
+
+                                    async def valider_suppr():
+                                        ok = await asyncio.to_thread(
+                                            DatabaseService.supprimer_fichier_crise, fid
+                                        )
+                                        if ok:
+                                            ui.notify(
+                                                "Pièce jointe supprimée.",
+                                                type="negative",
+                                            )
+                                            dlg.close()
+                                            await refresh_fichiers()
+                                        else:
+                                            ui.notify(
+                                                "Erreur lors de la suppression.",
+                                                type="negative",
+                                            )
+
+                                    with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                                        ui.button("Annuler", on_click=dlg.close).props(
+                                            "flat color=grey"
+                                        )
+                                        ui.button(
+                                            "Supprimer définitivement",
+                                            icon="delete",
+                                            color="red",
+                                            on_click=valider_suppr,
+                                        )
+                                dlg.open()
+
+                            with ui.row().classes(
+                                "w-full justify-between items-center bg-slate-900/90 p-2 rounded border border-slate-700 text-xs"
+                            ):
+                                with ui.row().classes("items-center gap-2 overflow-hidden"):
+                                    ui.icon(icone_mime(), color="blue-4", size="sm")
+                                    with ui.column().classes("gap-0 overflow-hidden"):
+                                        ui.label(nom).classes(
+                                            "font-bold text-slate-200 truncate max-w-[260px]"
+                                        )
+                                        meta_bits = " | ".join(
+                                            x for x in [taille_txt, cree_le] if x
+                                        )
+                                        if uploade:
+                                            meta_bits += f" — {uploade}"
+                                        ui.label(meta_bits).classes(
+                                            "text-[10px] text-slate-500"
+                                        )
+                                        if commentaire:
+                                            ui.label(commentaire).classes(
+                                                "text-[10px] text-slate-400 italic truncate max-w-[300px]"
+                                            )
+                                with ui.row().classes("items-center gap-1"):
+                                    ui.button(
+                                        icon="download", on_click=telecharger
+                                    ).props("flat color=blue-4 dense sm").tooltip(
+                                        "Télécharger (lien signé 1 h)"
+                                    )
+                                    ui.button(
+                                        icon="edit", on_click=modifier_f
+                                    ).props("flat color=amber-4 dense sm").tooltip(
+                                        "Modifier (nom / commentaire)"
+                                    )
+                                    ui.button(
+                                        icon="delete", on_click=supprimer_f
+                                    ).props("flat color=red dense sm").tooltip("Supprimer")
+
+                MAX_TAILLE_PJ = 20 * 1024 * 1024  # 20 Mo
+
+                async def on_upload_pj(e):
+                    try:
+                        fichier = e.file
+                        nom = getattr(fichier, "name", "fichier")
+                        mime = getattr(fichier, "content_type", "") or ""
+                        if hasattr(fichier, "read"):
+                            contenu = await fichier.read()
+                        else:
+                            contenu = getattr(fichier, "data", b"") or b""
+                        if len(contenu) > MAX_TAILLE_PJ:
+                            ui.notify(
+                                f"« {nom} » dépasse 20 Mo — non ajouté.",
+                                type="warning",
+                            )
+                            return
+                        user_name = ""
+                        try:
+                            user_name = str(
+                                app.storage.user.get("nom_complet", "") or ""
+                            )
+                        except Exception:
+                            user_name = ""
+                        row = await asyncio.to_thread(
+                            DatabaseService.upload_fichier_crise,
+                            crise_id,
+                            nom,
+                            contenu,
+                            mime,
+                            "",
+                            user_name,
+                        )
+                        if row:
+                            ui.notify(f"📎 {nom} ajouté à la cellule.", type="positive")
+                            await refresh_fichiers()
+                        else:
+                            ui.notify(
+                                f"Erreur lors de l'ajout de « {nom} ».",
+                                type="negative",
+                            )
+                    except Exception as err:
+                        print(f"❌ Erreur upload PJ crise : {err}")
+                        ui.notify("Erreur lors de l'upload.", type="negative")
+
+                ui.upload(
+                    label="Ajouter des fichiers (jpg, png, pdf, office, eml, zip… — max 20 Mo)",
+                    on_upload=on_upload_pj,
+                    multiple=True,
+                    auto_upload=True,
+                ).props(
+                    'accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.csv,.md,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.eml,.msg,.zip,.rar"'
+                ).classes("w-full")
+
+                await refresh_fichiers()
     dialog.open()
 
 
@@ -243,6 +549,22 @@ async def open_edit_crise_dialog(crise):
         getattr(crise, "statut", None)
         or (crise.get("statut") if isinstance(crise, dict) else "EN_SOMMEIL")
     )
+
+    # Liaison crise <-> site : crise « de niveau site » (site_impacte_id) ou crise nationale.
+    site_impacte_actuel = str(
+        (
+            crise.get("site_impacte_id")
+            if isinstance(crise, dict)
+            else getattr(crise, "site_impacte_id", None)
+        )
+        or ""
+    )
+    sites_db = await asyncio.to_thread(DatabaseService.get_all_sites) or []
+    options_sites = {"": "🌍 Crise nationale — aucun site rattaché"}
+    for s in sites_db:
+        sid = str(getattr(s, "id", "") or "")
+        if sid:
+            options_sites[sid] = f"{s.code_site} — {s.nom}"
 
     with ui.dialog() as dialog, ui.card().classes(
         "w-[650px] max-w-full max-h-[90vh] overflow-y-auto bg-slate-900 border border-slate-700 text-slate-100 p-5"
@@ -341,6 +663,17 @@ async def open_edit_crise_dialog(crise):
                 edit_lieu = ui.input(
                     label="Lieu / PC Crise", value=lieu_actuel
                 ).classes("w-full")
+
+                select_site = ui.select(
+                    options=options_sites,
+                    value=(
+                        site_impacte_actuel
+                        if site_impacte_actuel in options_sites
+                        else ""
+                    ),
+                    label="Site impacté (crise de niveau site) — vide = crise nationale",
+                ).classes("w-full")
+
                 edit_desc = ui.textarea(
                     label="Description", value=desc_actuelle
                 ).classes("w-full")
@@ -355,6 +688,7 @@ async def open_edit_crise_dialog(crise):
                         lieu_pc=edit_lieu.value,
                         description=edit_desc.value,
                         statut=edit_statut.value,
+                        site_impacte_id=select_site.value or "",
                     )
 
                     if ok:
@@ -365,6 +699,26 @@ async def open_edit_crise_dialog(crise):
                 ui.button("Enregistrer", icon="save", on_click=update_crise_info).props(
                     "color=blue sm font-bold"
                 ).classes("self-end")
+
+        # Pièces jointes : dialogue dédié, ouvert depuis la carte crise
+        # (bouton 📎 à côté de Main Courante / SITREP) et depuis ici.
+        nb_pj = len(
+            await asyncio.to_thread(DatabaseService.get_fichiers_crise, crise_id) or []
+        )
+        with ui.row().classes(
+            "w-full items-center justify-between bg-slate-800/80 border border-slate-700 rounded mb-3 p-3"
+        ):
+            with ui.row().classes("items-center gap-2 overflow-hidden"):
+                ui.icon("attach_file", color="amber-4", size="sm")
+                ui.label(f"Pièces jointes ({code_crise})").classes(
+                    "font-bold text-slate-200 text-sm truncate"
+                )
+                ui.label(f"{nb_pj} fichier(s)").classes("text-xs text-slate-400")
+            ui.button(
+                "Ouvrir",
+                icon="open_in_new",
+                on_click=lambda c=crise: open_fichiers_crise_dialog(c),
+            ).props("color=amber sm font-bold")
 
         # Affectation RH
         with ui.expansion("Équipe & Convocations RH", icon="groups").classes(
@@ -497,7 +851,7 @@ async def open_edit_crise_dialog(crise):
                                 DatabaseService.consigner_main_courante,
                                 crise_id=crise_id,
                                 description=f"👤 AFFECTATION : {agent_nom} affecté(e) au rôle de [{fonction_role}].",
-                                categorie="AFFECTATION",
+                                categorie="DECISION",
                                 auteur="OPERATEUR",
                                 statut_info="CONFIRMEE",
                             )
@@ -536,12 +890,12 @@ async def open_edit_crise_dialog(crise):
         async def delete_crise_action():
             await asyncio.to_thread(DatabaseService.delete_crise, crise_id)
             dialog.close()
-            ui.navigate.reload()
+            await _refresh_crises_tab_or_reload()
 
         async def archive_crise_action():
             await asyncio.to_thread(DatabaseService.archiver_crise, crise_id)
             dialog.close()
-            ui.navigate.reload()
+            await _refresh_crises_tab_or_reload()
 
         with ui.row().classes(
             "justify-between w-full border-t border-slate-700 pt-3 mt-2"

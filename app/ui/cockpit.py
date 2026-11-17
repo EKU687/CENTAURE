@@ -532,6 +532,13 @@ def open_inspection_dialog(site):
 async def create_cockpit_page():
     """Interface du Cockpit Central avec gestion multi-rôles dont CRISE_SG."""
     await ui.context.client.connected()
+    # Anneau de mise en évidence de la cellule de crise ciblée depuis une carte site.
+    ui.add_head_html(
+        "<style>"
+        ".crise-focus-ring{outline:4px solid #fbbf24 !important;"
+        " box-shadow:0 0 28px rgba(251,191,36,.65) !important; border-radius:8px;}"
+        "</style>"
+    )
     user_role = app.storage.user.get("role", "GUEST")
     user_name = app.storage.user.get(
         "nom_complet", app.storage.user.get("username", "Utilisateur")
@@ -736,7 +743,45 @@ async def create_cockpit_page():
                             else:
                                 card_style = "bg-slate-800 border border-slate-700 text-slate-100 p-5 shadow-lg"
 
-                            with ui.card().classes(card_style):
+                            with ui.card().classes(
+                                card_style + " cursor-pointer"
+                            ) as site_card:
+
+                                def go_to_crises_cellule(site_target=site):
+                                    """Branchement direct : clic sur la carte site ->
+                                    onglet « Cellules de Crise », avec mise en évidence
+                                    de la cellule rattachée à ce site (site_impacte_id)."""
+                                    if tab_crises is None:
+                                        ui.notify(
+                                            "Votre rôle n'a pas accès à l'onglet « Cellules de Crise ».",
+                                            type="warning",
+                                        )
+                                        return
+                                    focus_site_id = str(
+                                        getattr(site_target, "id", "") or ""
+                                    )
+                                    if focus_site_id:
+                                        app.storage.client["crise_focus_site_id"] = (
+                                            focus_site_id
+                                        )
+                                    tabs.set_value(tab_crises)
+                                    if focus_site_id:
+                                        ui.run_javascript(
+                                            "setTimeout(() => {"
+                                            "document.querySelectorAll('.crise-focus-ring')"
+                                            ".forEach(e => e.classList.remove('crise-focus-ring'));"
+                                            "const el = document.querySelector("
+                                            f"'[data-crise-site=\"{focus_site_id}\"]');"
+                                            "if (el) { el.classList.add('crise-focus-ring');"
+                                            " el.scrollIntoView({behavior:'smooth', block:'center'}); }"
+                                            "}, 400);"
+                                        )
+
+                                site_card.on("click", go_to_crises_cellule)
+                                site_card.tooltip(
+                                    "Clic → onglet « Cellules de Crise » (cellule rattachée au site mise en évidence)"
+                                )
+
                                 with ui.row().classes(
                                     "justify-between items-center w-full mb-2"
                                 ):
@@ -821,21 +866,36 @@ async def create_cockpit_page():
                                 )
 
                                 with ui.row().classes("w-full gap-2 mt-auto"):
+                                    # Bouton explicite de branchement direct (le clic
+                                    # sur la carte entière fait la même chose).
+                                    btn_cellule = ui.button(
+                                        icon="arrow_circle_right",
+                                        on_click=go_to_crises_cellule,
+                                    ).props("sm color=red-7").props(
+                                        'onclick="event.stopPropagation()"'
+                                    ).classes("flex-1").tooltip(
+                                        "Basculer sur l'onglet « Cellules de Crise » "
+                                        "(cellule rattachée au site mise en évidence)"
+                                    )
                                     if can_manage_sites:
                                         make_manage_handler = lambda s_target=site: lambda: open_inspection_dialog(
                                             s_target
                                         )
                                         ui.button(
                                             "Gérer", on_click=make_manage_handler()
-                                        ).props("sm outline color=grey-4").classes(
-                                            "w-1/2"
+                                        ).props("sm outline color=grey-4").props(
+                                            'onclick="event.stopPropagation()"'
+                                        ).classes(
+                                            "flex-1"
                                         )
                                         ui.button(
                                             "Écran Site",
                                             icon="open_in_new",
                                             on_click=make_site_screen_handler(),
-                                        ).props("sm color=blue-7").classes(
-                                            "w-1/2"
+                                        ).props("sm color=blue-7").props(
+                                            'onclick="event.stopPropagation()"'
+                                        ).classes(
+                                            "flex-1"
                                         ).tooltip(
                                             "Ouvrir l'écran de supervision Kiosque sécurisé"
                                         )
@@ -844,8 +904,10 @@ async def create_cockpit_page():
                                             "Écran Site",
                                             icon="open_in_new",
                                             on_click=make_site_screen_handler(),
-                                        ).props("sm color=blue-7").classes(
-                                            "w-full"
+                                        ).props("sm color=blue-7").props(
+                                            'onclick="event.stopPropagation()"'
+                                        ).classes(
+                                            "flex-1"
                                         ).tooltip(
                                             "Ouvrir l'écran de supervision Kiosque sécurisé"
                                         )
@@ -868,7 +930,14 @@ async def create_cockpit_page():
         # ONGLET 2 : CELLULES DE CRISE SG
         if can_access_crises and tab_crises:
             with ui.tab_panel(tab_crises):
-                await crises_ui.render_crises_view(is_sg_admin=can_access_crises)
+                @ui.refreshable
+                async def render_crises_tab():
+                    await crises_ui.render_crises_view(is_sg_admin=can_access_crises)
+
+                await render_crises_tab()
+                # Handle stocké : permet aux dialogues de crise de rafraîchir cet
+                # onglet sans recharger la page (on reste sur « Cellules de Crise »).
+                app.storage.client["refresh_crises_tab"] = render_crises_tab.refresh
 
         # ONGLET 3 : ANNUAIRE RH & ASTREINTES
         if can_access_crises and tab_annuaire:

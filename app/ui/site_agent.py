@@ -1,5 +1,11 @@
+import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from nicegui import ui
 from app.services.database_service import db_service, DatabaseService
+
+LOCAL_TZ = ZoneInfo("Pacific/Noumea")
 
 # Référentiel de la Doctrine officielle CENTAURE
 DOCTRINE_INFO = {
@@ -71,9 +77,18 @@ def create_site_page(code_site: str):
             ).classes("animate-pulse")
             badge_armed.set_visibility(False)
 
-    content_container = ui.column().classes(
-        "w-full px-8 py-4 gap-4 bg-slate-900 h-[calc(100vh-65px)] text-slate-100 items-center justify-start overflow-y-auto"
-    )
+    with ui.column().classes(
+        "w-full h-[calc(100vh-65px)] bg-slate-900 text-slate-100 gap-0"
+    ):
+        content_container = ui.column().classes(
+            "w-full px-8 py-4 gap-4 items-center justify-start overflow-y-auto flex-1"
+        )
+        # Section Main Courante terrain, hors de content_container : elle n'est
+        # PAS reconstruite par le rafraîchissement 2 s (sinon le formulaire de
+        # saisie serait vidé en cours de frappe).
+        mc_container = ui.column().classes(
+            "w-full px-8 pt-2 pb-3 gap-2 flex-none border-t border-slate-800 bg-slate-950/80"
+        )
 
     def start_siren():
         ui.run_javascript("""
@@ -377,6 +392,188 @@ def create_site_page(code_site: str):
                     )
 
                 dialog_s4.open()
+
+    # ------------------------------------------------------------------
+    # MAIN COURANTE TERRAIN (poste de garde) — les événements sont consignés
+    # dans la cellule de crise rattachée au site (site_impacte_id), si elle
+    # existe. Crise nationale (site_impacte_id NULL) => pas de consignation
+    # terrain sur ce poste.
+    # ------------------------------------------------------------------
+    mc_state = {"crise": None, "journal": None}
+
+    def _site_courant():
+        sites = db_service.get_all_sites()
+        return next(
+            (s for s in sites if s.code_site.upper() == code_site.upper()), None
+        )
+
+    def _fmt_heure_mc(raw) -> str:
+        if not raw:
+            return "--:--"
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            return dt.astimezone(LOCAL_TZ).strftime("%H:%M")
+        except Exception:
+            return str(raw)[11:16]
+
+    def _render_mc_journal(logs):
+        """Remplit le journal (appelé dans le contexte du conteneur journal)."""
+        if not logs:
+            ui.label("Aucun événement consigné pour le moment.").classes(
+                "text-xs text-slate-500 italic p-1"
+            )
+            return
+        for l in logs[:10]:
+            cat = str(l.get("categorie") or "INFO").upper()
+            prio = str(l.get("niveau_priorite") or "NORMALE").upper()
+            prio_color = (
+                "red"
+                if prio == "CRITIQUE"
+                else ("amber" if prio == "URGENT" else "slate-7")
+            )
+            desc = str(l.get("description") or l.get("message") or "")
+            with ui.row().classes("w-full items-center gap-2 text-xs flex-none"):
+                ui.label(
+                    _fmt_heure_mc(l.get("horodatage") or l.get("created_at"))
+                ).classes("font-mono font-bold text-slate-300 w-10 flex-none")
+                ui.badge(cat, color="grey-8").classes("font-mono text-[10px]")
+                ui.badge(prio, color=prio_color).classes("text-[10px]")
+                ui.label(desc).classes("text-slate-200 flex-grow truncate").tooltip(desc)
+                ui.label(str(l.get("auteur") or "")).classes(
+                    "text-slate-400 font-bold whitespace-nowrap flex-none"
+                )
+
+    def render_mc():
+        """Rebuild complet de la section main courante terrain."""
+        mc_container.clear()
+        site = _site_courant()
+        crise = DatabaseService.get_active_crise_for_site(site.id) if site else None
+        mc_state["crise"] = crise
+        mc_state["journal"] = None
+
+        with mc_container:
+            with ui.row().classes(
+                "w-full max-w-5xl items-center justify-between flex-wrap gap-2"
+            ):
+                with ui.row().classes("items-center gap-2"):
+                    ui.icon("assignment", color="amber-4", size="sm")
+                    ui.label(f"MAIN COURANTE TERRAIN — {code_site.upper()}").classes(
+                        "text-sm font-black text-amber-400 tracking-wider"
+                    )
+                if crise:
+                    badge_color = "red" if crise.get("statut") == "ACTIVEE" else "amber"
+                    ui.badge(
+                        f"Cellule : {crise.get('code_crise')} ({crise.get('statut')})",
+                        color=badge_color,
+                    ).classes("font-bold text-[10px]")
+                else:
+                    ui.badge("AUCUNE CELLULE RATTACHÉE", color="grey-7").classes(
+                        "font-bold text-[10px]"
+                    )
+
+            if not crise:
+                ui.label(
+                    "Aucune cellule de crise n'est rattachée à ce site : la consignation "
+                    "terrain est indisponible. Le PCO peut lier une cellule à ce site "
+                    "depuis l'onglet « Cellules de Crise » (champ « Site impacté »)."
+                ).classes("text-xs text-slate-400 italic max-w-5xl")
+                return
+
+            with ui.row().classes("w-full max-w-5xl gap-2 items-end flex-wrap"):
+                select_cat = ui.select(
+                    options=[
+                        "RONDE",
+                        "INCIDENT",
+                        "PRISE_DE_POSTE",
+                        "ANOMALIE",
+                        "INFORMATION",
+                    ],
+                    value="INFORMATION",
+                    label="Catégorie",
+                ).classes("w-44 bg-slate-900").props("dense")
+                select_prio = ui.select(
+                    options=["NORMALE", "URGENT", "CRITIQUE"],
+                    value="NORMALE",
+                    label="Priorité",
+                ).classes("w-36 bg-slate-900").props("dense")
+                input_mc = ui.input(
+                    label="Événement à consigner",
+                    placeholder="Ex : Ronde 14h00 effectuée — RAS...",
+                ).classes("flex-grow min-w-[240px] bg-slate-900")
+
+                async def consigner_terrain():
+                    texte = str(input_mc.value or "").strip()
+                    if not texte:
+                        ui.notify("Saisissez d'abord un événement.", type="warning")
+                        return
+                    ok = await asyncio.to_thread(
+                        DatabaseService.consigner_main_courante,
+                        crise_id=crise.get("id"),
+                        description=texte,
+                        categorie=select_cat.value,
+                        auteur=f"Agent {code_site.upper()}",
+                        niveau_priorite=select_prio.value,
+                        statut_info="CONFIRMEE",
+                        is_sitrep=False,
+                    )
+                    if ok:
+                        ui.notify(
+                            "Événement consigné dans la main courante.", type="positive"
+                        )
+                        input_mc.value = ""
+                        await refresh_mc_journal()
+                    else:
+                        ui.notify(
+                            "Échec de la consignation dans Supabase.", type="negative"
+                        )
+
+                ui.button(
+                    "CONSIGNER", icon="send", on_click=consigner_terrain
+                ).props("color=amber-7 text-white font-bold sm")
+
+            mc_journal = ui.column().classes(
+                "w-full max-w-5xl gap-1 max-h-36 overflow-y-auto bg-slate-900/60 "
+                "border border-slate-800 rounded p-2"
+            )
+            mc_state["journal"] = mc_journal
+            with mc_journal:
+                _render_mc_journal(
+                    DatabaseService.get_main_courante_by_crise(crise.get("id")) or []
+                )
+
+    async def refresh_mc_journal():
+        crise = mc_state.get("crise")
+        journal = mc_state.get("journal")
+        if not crise or journal is None:
+            return
+        logs = (
+            await asyncio.to_thread(
+                DatabaseService.get_main_courante_by_crise, crise.get("id")
+            )
+            or []
+        )
+        journal.clear()
+        with journal:
+            _render_mc_journal(logs)
+
+    async def tick_mc():
+        """Re-vérifie la liaison crise/site toutes les 10 s : rebuild de la section
+        si la cellule rattachée a changé, sinon simple rafraîchissement du journal."""
+        site = await asyncio.to_thread(_site_courant)
+        crise = (
+            await asyncio.to_thread(DatabaseService.get_active_crise_for_site, site.id)
+            if site
+            else None
+        )
+        old_id = str((mc_state.get("crise") or {}).get("id") or "")
+        new_id = str((crise or {}).get("id") or "")
+        if old_id != new_id:
+            render_mc()
+        else:
+            await refresh_mc_journal()
+
+    render_mc()
+    ui.timer(10.0, tick_mc)
 
     render_content()
     ui.timer(2.0, render_content)

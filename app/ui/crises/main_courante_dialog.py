@@ -47,10 +47,10 @@ async def open_main_courante_dialog(crise):
     ) or []
 
     with ui.dialog() as dialog, ui.card().classes(
-        "w-full max-w-5xl bg-slate-900 border border-red-800 text-slate-100 p-6"
+        "w-full max-w-7xl bg-slate-900 border border-red-800 text-slate-100 p-6"
     ).style(
         "display: flex; flex-direction: column; justify-content: flex-start; "
-        "gap: 1rem; max-height: 85vh; overflow: hidden"
+        "gap: 1rem; max-height: 92vh; overflow: hidden"
     ):
         # 1. En-tête
         with ui.row().classes(
@@ -112,7 +112,7 @@ async def open_main_courante_dialog(crise):
                         label="Description de l'événement / Consigne *",
                         placeholder="Saisir la description détaillée ici...",
                     )
-                    .props("rows=2")
+                    .props("rows=3")
                     .classes("flex-grow bg-slate-900 text-white text-sm")
                 )
 
@@ -250,7 +250,7 @@ async def open_main_courante_dialog(crise):
         journal_container = ui.column().classes(
             "w-full gap-2 pr-2 border border-slate-800 bg-slate-950/60 p-3 rounded"
         ).style(
-            "flex: 1 1 0%; min-height: 180px; max-height: 420px; overflow-y: auto"
+            "flex: 1 1 0%; min-height: 220px; max-height: 55vh; overflow-y: auto"
         )
 
         @ui.refreshable
@@ -276,6 +276,7 @@ async def open_main_courante_dialog(crise):
                     )
                     raw_date = str(evt.get("horodatage") or evt.get("created_at") or "")
                     horodatage_fmt = "N/A"
+                    horodatage_court = "N/A"
                     if raw_date:
                         try:
                             dt_log = datetime.fromisoformat(
@@ -284,8 +285,12 @@ async def open_main_courante_dialog(crise):
                             horodatage_fmt = dt_log.astimezone(LOCAL_TZ).strftime(
                                 "%d/%m/%Y à %H:%M"
                             )
+                            horodatage_court = dt_log.astimezone(LOCAL_TZ).strftime(
+                                "%d/%m %H:%M"
+                            )
                         except Exception:
                             horodatage_fmt = raw_date[:19].replace("T", " à ")
+                            horodatage_court = horodatage_fmt
 
                     statut_info = str(evt.get("statut_info") or "CONFIRMEE").upper()
                     assigned_dir = evt.get("direction_concernee")
@@ -322,54 +327,68 @@ async def open_main_courante_dialog(crise):
 
                         return handle_toggle
 
-                    with ui.card().classes(
-                        f"w-full bg-slate-800/80 border {card_border} p-3 text-xs flex-none"
-                    ):
-                        with ui.row().classes(
-                            "justify-between items-center w-full mb-1"
-                        ):
-                            with ui.row().classes("items-center gap-2 flex-wrap"):
-                                ui.badge(cat_item, color="grey-8").classes(
-                                    "font-mono font-bold"
-                                )
-                                ui.badge(prio_raw, color=prio_color).classes(
-                                    "font-bold"
-                                )
-
-                                if assigned_dir and str(assigned_dir) not in [
-                                    "TOUTES / GÉNÉRAL",
-                                    "TOUTES / GENERAL",
-                                    "None",
-                                    "",
-                                ]:
-                                    ui.badge(
-                                        f"🎯 {assigned_dir}", color="purple-9"
-                                    ).classes("font-bold text-[10px]")
-
-                                ui.label(f"🟢 {statut_info}").classes(
-                                    "text-slate-300 font-bold"
-                                )
-                                ui.label(horodatage_fmt).classes(
-                                    "text-slate-400 font-mono"
-                                )
-
-                            with ui.row().classes("items-center gap-2"):
-                                ui.button(
-                                    "📌 SITREP SG" if is_sitrep_flag else "+ SITREP",
-                                    on_click=make_handler(log_id, is_sitrep_flag),
-                                ).props(
-                                    f"color={'amber' if is_sitrep_flag else 'slate-600'} unelevated dense text-color=white"
-                                ).classes(
-                                    "text-[10px] font-bold px-2 py-0.5"
-                                )
-
-                                ui.label(
-                                    f"Auteur : {evt.get('auteur', 'Opérateur')}"
-                                ).classes("font-bold text-slate-300 ml-2")
-
-                        ui.label(desc_text).classes(
-                            "text-sm text-slate-100 font-sans mt-1 whitespace-pre-line"
+                    statut_color = (
+                        "text-emerald-400"
+                        if statut_info == "CONFIRMEE"
+                        else (
+                            "text-amber-400"
+                            if statut_info == "A_VERIFIER"
+                            else "text-red-400"
                         )
+                    )
+                    with ui.card().classes(
+                        f"w-full bg-slate-800/80 border {card_border} p-2 text-sm flex-none"
+                    ):
+                        # Une seule ligne par événement (format chronologie) :
+                        # heure | catégorie | priorité | direction | statut
+                        # | description (tronquée à l'écran, complète au survol
+                        #   et dans le DOM pour Ctrl+F) | bouton SITREP | auteur
+                        with ui.row().classes("items-center gap-2 w-full flex-nowrap"):
+                            heure_lbl = ui.label(horodatage_court).classes(
+                                "text-slate-400 font-mono text-xs w-[74px] flex-none"
+                            )
+                            heure_lbl.tooltip(horodatage_fmt)
+                            ui.badge(cat_item, color="grey-8").classes(
+                                "font-mono font-bold text-[10px]"
+                            )
+                            ui.badge(prio_raw, color=prio_color).classes(
+                                "font-bold text-[10px]"
+                            )
+
+                            if assigned_dir and str(assigned_dir) not in [
+                                "TOUTES / GÉNÉRAL",
+                                "TOUTES / GENERAL",
+                                "None",
+                                "",
+                            ]:
+                                ui.badge(
+                                    f"🎯 {assigned_dir}", color="purple-9"
+                                ).classes("font-bold text-[10px]")
+
+                            ui.label(f"● {statut_info}").classes(
+                                f"{statut_color} text-[10px] font-bold flex-none"
+                            )
+                            ui.label(desc_text).classes(
+                                "text-sm text-slate-100 flex-grow truncate min-w-0"
+                            ).tooltip(desc_text)
+                            ui.button(
+                                icon="push_pin" if is_sitrep_flag else "add",
+                                on_click=make_handler(log_id, is_sitrep_flag),
+                            ).props(
+                                "round dense flat "
+                                + (
+                                    "color=amber text-color=white"
+                                    if is_sitrep_flag
+                                    else "color=slate-600 text-color=white"
+                                )
+                            ).tooltip(
+                                "Retirer du SITREP SG"
+                                if is_sitrep_flag
+                                else "Inclure dans le SITREP SG"
+                            )
+                            ui.label(str(evt.get("auteur") or "Opérateur")).classes(
+                                "text-[10px] font-bold text-slate-400 whitespace-nowrap flex-none"
+                            )
 
         async def handle_submit():
             texte = input_desc.value

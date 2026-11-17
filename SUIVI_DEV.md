@@ -1,27 +1,238 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 13/11/2026 soir (fin) — COS + MIGRATION + ÉCRAN MURAL
-+ **DÉPLOIEMENT FLY.IO RÉALISÉ** (Mode: PRODUCTION, recette en ligne OK)
+**Dernière mise à jour :** 17/11/2026 — FINALISATION AVANT PROD (points 0a/0b/0c,
+pièces jointes par crise + bouton 📎 déplacé sur la carte crise — voir
+§ Séance du 17/11)
 **Branche :** `main` — refonte PCO + fin COS + écran mural **committés et
-poussés** ( **Serveur DEV local ARRÊTÉ proprement le 13/11 au soir** —
-relance à la prochaine séance :
+poussés** ( **Serveur DEV local ARRÊTÉ proprement le 14/11 au soir** — port
+8080 libéré (curl → 000) ; relance demain :
 `cd C:\Dev\CENTAURE && .venv\Scripts\python.exe -u main.py`,
-fenêtre dédiée, `PYTHONUNBUFFERED=1` si redirigé ;
+fenêtre dédiée, `PYTHONUNBUFFERED=1` si redirigé, logs dans `_dev_server.log` ;
 migration Supabase appliquée ; voir § Déploiement du 13/11 )
+
+---
+
+## 🗓️ Séance du 17/11 — finalisation avant mise en PROD (points 0a/0b/0c)
+
+Objectif : livrer les 3 points notés le 14/11 soir, puis commit/push + déploiement Fly.io.
+
+Décisions prises et raisons :
+
+1. **0c — rester sur l'onglet « Cellules de Crise » après clôture/archivage** :
+   l'onglet PCO est désormais rendu dans un `@ui.refreshable`
+   (`cockpit.py`), dont le handle `.refresh` est stocké dans
+   `app.storage.client["refresh_crises_tab"]` ; `archive_crise_action` /
+   `delete_crise_action` (`crise_dialogs.py`) appellent
+   `_refresh_crises_tab_or_reload()` (repli `ui.navigate.reload()` si handle
+   absent) au lieu de recharger toute la page.
+2. **0b — phrase de convocation conditionnelle** : `_phrase_convocation(niveau)`
+   dans `notification_service.py` — gravité >= 3 ou CRITIQUE/MAJEURE/S4 →
+   « rejoindre immédiatement le PC Crise » ; sinon « prenez connaissance de
+   cette activation et tenez-vous prêt(e)… ». Utilisée dans les 2 e-mails
+   (activation + affectation individuelle).
+3. **0a — SITREP en PDF joint à l'e-mail** : nouveau module
+   `app/services/pdf_service.py` — **PDF généré en Python pur** (A4, Helvetica,
+   WinAnsiEncoding, pagination, wrapping) pour éviter toute dépendance à
+   installer. `send_sitrep_email` joint `SITREP_<code>_n<num>.pdf` en base64
+   (`payload["attachment"]` Brevo) ; si la génération PDF échoue, l'e-mail part
+   **sans** PJ (log warning).
+
+Fichiers modifiés :
+
+- `app/services/pdf_service.py` (nouveau)
+- `app/services/notification_service.py` (import base64 + pdf_service,
+  `_phrase_convocation`, signature `_send_email_via_api_sync` /
+  `send_email_async` avec `attachment_name`/`attachment_bytes`, PJ dans
+  `send_sitrep_email`)
+- `app/ui/cockpit.py` (onglet crises en `@ui.refreshable` + handle stocké)
+- `app/ui/crises/crise_dialogs.py` (helper `_refresh_crises_tab_or_reload`,
+  actions archiver/supprimer)
+
+Tests exécutés et résultats (17/11) :
+
+- `py_compile` sur les 4 fichiers : OK.
+- Test unitaire PDF : structure valide (`%PDF-1.4`, xref/startxref cohérents,
+  Catalog/Pages/Font présents), 1 page, ~2 Ko ; contenu minimal OK.
+- Test unitaire `_phrase_convocation` : OK (4/CRITIQUE/N3 → immédiat ;
+  2/N1 → « prenez connaissance »).
+- `_test_login_routing.py` (read-only) : **TEST_ROUTING_OK** au 2e run (5 rôles
+  conformes) ; 1er run : OPERATEUR_SG actif=None → artefact de timing, non lié
+  au code modifié (ce rôle ne passe pas par l'onglet crises).
+- **Serveur DEV lancé en arrière-plan** (`python -u main.py`, mode DEVELOPMENT,
+  port 8080) puis arrêté proprement (port libéré, curl → 000) :
+  - Smoke HTTP : `/`, `/login`, `/kiosk?token=invalide`, `/kiosk`, `/wall`,
+    `/wall?token=<DINUM>`, `/kiosk?token=<DINUM>`, `/site/DINUM` → tous 200 ;
+    messages conformes (JETON INCONNU, ACCÈS REFUSÉ anti-triche).
+  - Tests simulation read-only : `_test_branchement_mc.py` **TEST_BRANCHEMENT_OK**,
+    `_test_clic_reel.py` **TEST_CLIC_REEL_OK**, `_test_pco_ro.py` **TEST_PCO_OK**,
+    `_test_schema_ro.py` **TEST_SCHEMA_RO_OK**, `_test_site_crise_ro.py`
+    **TEST_SITE_CRISE_RO_OK**.
+  - Logs serveur : 3 tracebacks = reconnexions Supabase HTTP/2 gérées par
+    `run_supabase` (WinError 10035, retry OK) — non bloquantes.
+  - **Point 0a vérifié de bout en bout en live** : 1 e-mail SITREP
+    (CRISE-2026-F082 n°2) émis pendant la phase de tests avec le **PDF joint
+    généré à la volée (1794 octets)** → Brevo « E-mail délivré avec succès »
+    à eric.kuter@gouv.nc. ⚠️ envoi réel parti pendant les tests (destinataire
+    = membre de la crise de test) : à signaler, contenu = données de test.
+  - **Refonte « pro » du PDF** (`pdf_service.py` réécrit, toujours sans
+    dépendance) : bandeau marine avec titre blanc, encadré infos crise,
+    sections colorées avec filet (bleu/ambre/vert/violet), pied de page
+    « Page X / Y — DIFFUSION RESTREINTE », pagination multi-pages, emojis
+    supprimés proprement (plus de '?'). Tests : py_compile OK, structure PDF
+    valide (xref), 2 pages sur contenu long, accents latin-1 OK.
+  - **Pied de page corrigé** (retour utilisateur : « DIFFUSION RESTREINTE » décalé)
+    : texte gauche raccourci (« CENTAURE — auto le … ») et mention centrée sur
+    sa largeur réelle (x=255.9, fin texte gauche à 195.6 → plus de chevauchement).
+    Re-vérifié par test unitaire.
+  - **Synthèse en liste lisible** (retour utilisateur : « chaque élément à la
+    ligne ») : `_split_body` découpe le texte body avant chaque « N. » et à
+    chaque saut de ligne source ; les longues lignes continuent indentées
+    (4 espaces). Normalisation latin-1 déplacée à la source (les indentations
+    de continuation sont préservées). Tests : y décroissants par élément,
+    continuation indentée OK, emojis sans '?', accents OK, xref valide.
+
+Tests non réalisés :
+
+- Recette navigateur réelle (clic humain) du refresh de l'onglet après
+  clôture/archivage, et de la PJ PDF reçue dans la boîte mail.
+- Application des migrations SQL (voir ci-dessous).
+
+Migrations SQL : `sql/migration_categories.sql` et
+`sql/migration_fonctions_crise.sql` **toutes deux appliquées le 17/11**
+(confirmé par l'utilisateur via SQL Editor Supabase). Non re-vérifiable en
+lecture via PostgREST (pg_catalog non exposé) ; les replis applicatifs 23514
+restent en filet de sécurité.
+
+Re-test avec serveur DEV relancé le 17/11 (après migrations + refonte PDF) :
+- Smoke HTTP : `/`, `/login`, `/kiosk?token=invalide`, `/wall`, `/wall?token=DINUM`,
+  `/kiosk?token=DINUM`, `/site/DINUM` → tous 200, messages de refus conformes.
+- Suite read-only : routing **TEST_ROUTING_OK**, branchement **TEST_BRANCHEMENT_OK**,
+  clic réel **TEST_CLIC_REEL_OK**, PCO **TEST_PCO_OK**, schéma **TEST_SCHEMA_RO_OK**,
+  site-crise **TEST_SITE_CRISE_RO_OK**.
+- Serveur arrêté proprement (port 8080 libéré).
+
+Prochaine action : appliquer les 2 migrations, puis commit + push (sur
+demande) et `flyctl deploy --remote-only` (sur demande explicite).
+
+---
+
+## 🗓️ Séance du 17/11 (suite) — Pièces jointes par crise (demande utilisateur)
+
+Objectif : chaque cellule de crise peut recevoir des fichiers (jpg, png, pdf,
+office, eml/msg, zip…) avec **ajout / modification / suppression**.
+
+Décisions :
+- Stockage binaire dans un **bucket Storage privé** `centaure-crise-fichiers`
+  (chemin `crise-<id>/<uuid8>_<nom_sanitizé>`), métadonnées en table
+  `centaure_crise_fichiers` ; téléchargement par **URL signée 1 h**
+  (bucket privé = pas d'accès public).
+- Upload limité à **20 Mo/fichier** ; noms de fichiers nettoyés (accents,
+  espaces, caractères spéciaux).
+- UI dans le dialogue « Gérer la cellule » (`open_edit_crise_dialog`) :
+  expansion « 📎 Pièces jointes » — upload multiple, liste (icône selon MIME,
+  taille, date, auteur, commentaire) avec boutons **Télécharger / Modifier
+  (nom + commentaire) / Supprimer** (confirmations en dialogue).
+
+Fichiers modifiés :
+- `sql/migration_fichiers_crise.sql` (nouveau — table + index + RLS + bucket +
+  policies Storage, idempotent) : **à appliquer dans le SQL Editor Supabase**.
+- `app/services/database_service.py` : `get_fichiers_crise`,
+  `upload_fichier_crise`, `update_fichier_crise`, `supprimer_fichier_crise`
+  (storage d'abord, puis ligne BDD), `url_signee_fichier_crise`,
+  `_sanitize_nom_fichier`, constante `BUCKET_FICHIERS_CRISE`.
+- `app/ui/crises/crise_dialogs.py` : expansion « 📎 Pièces jointes » dans le
+  dialogue d'édition de crise (upload multiple + liste + actions).
+
+Tests exécutés (17/11) :
+- `py_compile` sur `database_service.py` + `crise_dialogs.py` : OK.
+- Unitaires : `_sanitize_nom_fichier` (accents/espaces/longueur) OK ; méthodes
+  présentes ; source UI contient upload/liste/modifier/supprimer/télécharger.
+- Serveur DEV (reload à chaud) : `/`, `/login`, `/kiosk?token=DINUM` → 200.
+
+Tests non réalisés :
+- **Migration `migration_fichiers_crise.sql` à appliquer** (SQL Editor) puis
+  recette navigateur : upload d'un fichier sur une crise de test, télécharger
+  (URL signée), modifier, supprimer.
+- Upload réel vers le bucket (nécessite la migration appliquée).
+
+### 17/11 (suite 2) — Bouton Pièces jointes déplacé sur la carte crise
+
+Demande utilisateur : plutôt qu'une expansion enfouie dans « Gérer la cellule »,
+les PJ devaient être **à côté de Main Courante / SITREP / Fin de journée**.
+
+Appliqué :
+- `app/ui/crises/crise_dialogs.py` : nouveau dialogue dédié
+  **`open_fichiers_crise_dialog(crise)`** (header 📎 + code crise, expansion
+  ouverte par défaut contenant l'ancien bloc tel quel : upload multiple
+  ≤ 20 Mo, liste, télécharger / modifier / supprimer). Dans
+  `open_edit_crise_dialog`, l'ancienne expansion est remplacée par une ligne
+  « 📎 Pièces jointes (code) — N fichier(s) [Ouvrir] » qui appelle le même
+  dialogue (une seule implémentation de la logique PJ).
+- `app/ui/crises/view.py` : bouton `attach_file` ambré entre **Main Courante**
+  et **SITREP** sur chaque carte crise, tooltip « Pièces jointes de la crise »,
+  visible par tous les rôles ayant l'onglet Cellules de Crise.
+
+Tests (17/11) :
+- `py_compile` `view.py` + `crise_dialogs.py` : OK ; AST : fonction définie
+  1× dans `crise_dialogs.py`, importée dans `view.py`.
+- Serveur DEV (reload à chaud) : `crise_dialogs.py` + `view.py` rechargés sans
+  erreur ; `/` et `/login` → 200.
+- Migration `migration_fichiers_crise.sql` **appliquée** (SQL Editor) et PJ
+  testées OK en navigateur (upload/télécharger/modifier/supprimer).
+- Recette navigateur du **nouveau bouton 📎** sur la carte crise : à refaire
+  côté utilisateur sur `localhost:8080`.
+
+### 17/11 (suite 3) — Commit local (push + deploy PROD en attente)
+
+**Commit local effectué le 17/11** — push GitHub et déploiement Fly.io
+volontairement **non faits** (à réaliser depuis le domicile ; le réseau du
+bureau ne passe pas). Contenu du commit :
+- points 0a/0b/0c : SITREP en **PDF joint** à l'e-mail Brevo
+  (`pdf_service.py`, zéro dépendance), phrase de convocation conditionnelle
+  (gravité ≥ 3), archivage/suppression de crise avec **refresh de l'onglet
+  sans rechargement** ;
+- **pièces jointes par crise** : bucket privé + table + service + dialogue
+  dédié, bouton 📎 sur la carte crise ;
+- migrations SQL `migration_categories.sql`, `migration_fonctions_crise.sql`,
+  `migration_fichiers_crise.sql` (**appliquées côté Supabase le 17/11**) ;
+- refonte PCO du 14/11 (main courante, site agent, cockpit).
+
+Scripts `_test_*.py` laissés **non commités** (outils de vérification
+read-only jetables).
 
 ---
 
 ## 🔄 PROCHAINE SÉANCE — À FAIRE DANS L'ORDRE
 
+0. **Points notés le 14/11 soir pour le 15/11** (demandes utilisateur) :
+   a. **SITREP en PDF à l'envoi e-mail** : à l'étude — Brevo API accepte une
+      pièce jointe `attachment` (base64) en plus du corps HTML ; générer un
+      PDF du bulletin SITREP (`send_sitrep_email`,
+      `notification_service.py`).
+   b. **Mail d'activation de cellule** (`notification_service.py` →
+      `notify_crise_activation`) : la phrase « Vous êtes prié de rejoindre
+      immédiatement la cellule » n'est pas toujours adaptée — une activation
+      peut être purement informative. À rendre conditionnelle / adoucir
+      (« prenez connaissance de l'activation, tenez-vous prêt » selon le cas).
+   c. **Clôture / archivage d'une cellule** (`crise_dialogs.py`
+      `archive_crise_action` / `delete_crise_action`) : **rester sur l'onglet
+      « Cellules de Crise »** au lieu de `ui.navigate.reload()` qui renvoie
+      sur l'onglet par défaut (Sites Sensibles pour ADMIN/SUPERVISEUR).
 1. **Recette navigateur Main Courante** si non faite : F5 sur la page PCO,
    dialogue EC32 → événements visibles ; consigner → fermeture/rouverture
    automatique, nouvel événement en tête ; bascule « Inclure dans SITREP »
    idem ; compteurs PCO auto sous 30 s. À l'occasion : activer une cellule
    → vérifier que `activated_at` est écrit (chrono) et qu'un SITREP FDJ
    porte bien `type_sitrep='CLOTURE_JOURNALIERE'`.
-2. **Branchement direct « CELLULES DE CRISE »** depuis les cartes du
-   cockpit (à la place des dialogues de gestion actuels).
-3. **Main Courante terrain** (`app/ui/site_agent.py`).
+2. ~~**Branchement direct « CELLULES DE CRISE »** depuis les cartes du
+   cockpit~~ — **FAIT le 14/11** (carte site cliquable → onglet PCO, cellule
+   liée mise en évidence ; voir § Séance du 14/11).
+3. ~~**Main Courante terrain** (`app/ui/site_agent.py`)~~ — **FAIT le
+   14/11** (consignation agent dans la cellule rattachée au site).
+3bis. **Recette navigateur du code du 14/11** : relancer le serveur DEV,
+   F5 — vérifier clic carte site → onglet « Cellules de Crise » ; lier une
+   crise à un site (champ « Site impacté ») → highlight de la carte PCO ;
+   kiosk du site lié → Main Courante terrain consignation « Agent <CODE> ».
 4. **Révoquer le mot de passe applicatif Gmail (SMTP)** si non fait côté
    Google — l'ancien est exposé via l'historique GitHub public
    (voir § Sécurité). Il n'est **plus utilisé par l'application**
@@ -37,9 +248,144 @@ migration Supabase appliquée ; voir § Déploiement du 13/11 )
 
 ## Objectif en cours
 
-Refonte PCO **committée le 13/11**. Prochains chantiers : page « écran
-mural » dédiée, branchement direct « Cellules de Crise », Main Courante
-terrain (`app/ui/site_agent.py`).
+Refonte PCO **committée le 13/11**, écran mural livré. **14/11 : branchement
+direct « Cellules de Crise » depuis les cartes du cockpit + Main Courante
+terrain (`site_agent.py`) — codé et testé en local** (voir § Séance du
+14/11). Prochain : commit/push + déploiement Fly.io sur demande explicite.
+
+---
+
+## 🗓️ Séance du 14/11 — branchement direct Cellules de Crise + Main Courante terrain
+
+Décisions prises et raisons :
+
+1. **Branchement direct (décision utilisateur : « carte cliquable »)** : la
+   **carte site entière** du cockpit est cliquable → bascule directe sur
+   l'onglet « Cellules de Crise » ; les boutons « Gérer » / « Écran Site »
+   sont conservés et stoppent la propagation
+   (`onclick="event.stopPropagation()"`) pour ne pas déclencher la
+   navigation. Si une cellule est rattachée au site (`site_impacte_id`), sa
+   carte PCO est mise en évidence (anneau ambre `.crise-focus-ring` +
+   `scrollIntoView`) : ancre `data-crise-site` posée sur chaque carte PCO,
+   focus stocké dans `app.storage.client["crise_focus_site_id"]`. Rôles sans
+   accès aux crises (OPERATEUR_SG) : notification, pas de bascule.
+2. **Crise « de niveau site » vs crise nationale (décision utilisateur)** :
+   `centaure_crises.site_impacte_id` (colonne déjà présente en BDD,
+   inutilisée jusqu'ici — vérifié en lecture) distingue les deux. Sélecteur
+   « Site impacté » ajouté dans les dialogues de création et d'édition de
+   crise ; vide = crise nationale. `DatabaseService.update_crise` accepte
+   désormais `site_impacte_id` (chaîne vide → NULL).
+3. **Main Courante terrain** (`site_agent.py`) : section dédiée en bas du
+   poste de garde, **hors** du conteneur rafraîchi toutes les 2 s (sinon le
+   formulaire serait vidé en cours de saisie). Événements de l'agent
+   (`auteur = Agent <CODE>`, catégories RONDE / INCIDENT / PRISE_DE_POSTE /
+   ANOMALIE / INFORMATION, priorité, horodatage auto) consignés dans la main
+   courante de la **cellule rattachée au site** (nouvelle méthode
+   `DatabaseService.get_active_crise_for_site` : statut ACTIVEE/EN_SOMMEIL +
+   `site_impacte_id`, plus récente). Insertion non bloquante
+   (`asyncio.to_thread`) ; journal rafraîchi toutes les 10 s, rebuild de la
+   section si la liaison crise/site change. Aucune cellule rattachée →
+   bandeau « AUCUNE CELLULE RATTACHÉE » + consigne (le PCO lie la cellule via
+   le champ « Site impacté »). Note : `centaure_main_courante` n'a que
+   `crise_id` (pas de `site_id`) — pas de migration BDD lancée, le
+   rattachement par crise couvre le besoin.
+
+Fichiers modifiés :
+
+- `app/services/database_service.py` : `get_active_crise_for_site()` ;
+  `update_crise(..., site_impacte_id=...)` ("" → NULL).
+- `app/ui/cockpit.py` : carte site cliquable (`site_card.on("click", ...)`),
+  style `.crise-focus-ring`, stopPropagation sur les boutons internes.
+- `app/ui/crises/view.py` : ancre `data-crise-site` + classe focus sur la
+  carte PCO liée au site cliqué.
+- `app/ui/crises/crise_dialogs.py` : sélecteur « Site impacté » dans
+  `open_new_crise_dialog` (devenu `async`) et `open_edit_crise_dialog`.
+- `app/ui/site_agent.py` : section Main Courante terrain + timer 10 s.
+- Nouveaux tests : `_test_branchement_mc.py`, `_test_site_crise_ro.py`,
+  `_test_schema_ro.py`.
+
+Tests exécutés et résultats :
+
+- `py_compile` sur les 5 fichiers modifiés : OK.
+- `_test_branchement_mc.py` (simulation NiceGUI `User`, BDD réelle en
+  lecture) : **TEST_BRANCHEMENT_OK** — kiosk DINUM : section MAIN COURANTE
+  TERRAIN rendue + bandeau « aucune cellule rattachée » (attendu : aucun
+  `site_impacte_id` renseigné en BDD à ce jour) ; cockpit ADMIN : 4 cartes
+  cliquables (= 4 sites), 8 boutons avec stopPropagation, clic carte →
+  onglet « Cellules de Crise » + `crise_focus_site_id` = id du site, 3
+  cartes PCO avec `data-crise-site`.
+- `_test_login_routing.py` (garde-fou non-régression) : **TEST_ROUTING_OK**
+  (5 rôles conformes).
+- `_test_pco_ro.py` : **TEST_PCO_OK** (EC32 : evt=16, evt_apres_sitrep=4,
+  dernier SITREP n°2 du 12/11).
+- `_test_site_crise_ro.py` / `_test_schema_ro.py` : **OK** — schéma confirmé
+  en lecture : `site_impacte_id` existe (NULL sur les 4 crises) ;
+  `centaure_main_courante` n'a que `crise_id`. Vrai jeton kiosque DINUM =
+  `c7c18717-1611-4ee2-a3e0-fb7192bcec0b` (la fin du jeton était tronquée dans
+  CONTEXT.md).
+- Smoke HTTP (serveur local lancé puis **arrêté proprement**) : `/`,
+  `/login`, `/kiosk?token=<DINUM>`, `/kiosk?token=invalide`,
+  `/wall?token=<DINUM>`, `/site/DINUM` → tous 200.
+
+Tests non réalisés :
+
+- Recette navigateur réelle du clic carte → onglet PCO + highlight (à faire
+  après avoir lié une crise à un site — aucune crise liée à ce jour, le
+  highlight n'est pas encore observable) et consignation terrain réelle
+  (écriture BDD) depuis le kiosk.
+- Déploiement Fly.io du code du 14/11 (non sollicité).
+
+Ajustement UX même séance (14/11, retour utilisateur « fenêtre Main Courante
+trop petite, événements difficiles à lire ») — `main_courante_dialog.py` :
+dialogue élargi (`max-w-5xl` → `max-w-7xl`, `max-height: 85vh` → `92vh`),
+journal `min-height: 180px / max-height: 420px` → `220px / 55vh`, cartes
+d'événements `p-3 text-xs` → `p-4 text-sm`, description `text-sm` →
+`text-base`, zone de saisie `rows=2` → `rows=3`. Re-vérifié : `py_compile`
+OK, reload à chaud du serveur DEV OK (`/login` 200),
+`_test_dialog_render.py` — 16 cartes d'événements bien dans l'arbre du
+journal du dialogue, `_test_pco_ro.py` **TEST_PCO_OK**.
+
+Ajustement UX n°2 même séance (14/11, retour utilisateur « événements sur 2
+lignes, peu dense en recherche ») — `main_courante_dialog.py` : chaque
+événement du journal passe sur **une seule ligne** (format chronologie :
+heure courte `JJ/MM HH:MM` avec date complète au survol | catégorie |
+priorité | direction | statut coloré | description tronquée à l'écran mais
+**complète au survol (tooltip) et dans le DOM (Ctrl+F)** | bouton SITREP
+réduit à une icône | auteur en `text-[10px]`), carte `p-2`. Re-vérifié :
+`py_compile` OK, reload à chaud DEV OK (`/login` 200),
+`_test_dialog_render.py` — 17 cartes dans l'arbre du dialogue (16
+événements), journal bien dans l'arbre.
+
+Ajustements UX n°3 même séance (14/11, retours recette utilisateur sur crise
+de test CRISE-2026-F082 liée à DINUM) :
+
+1. **Branchement direct** : ajout d'un **bouton explicite rouge « → »** sur
+   chaque carte site (même action que le clic carte, `stopPropagation`), +
+   tooltip sur la carte. En simulation, le vrai clic fonctionne
+   (`_test_clic_reel.py` **TEST_CLIC_REEL_OK** : bascule onglet « Cellules de
+   Crise » + `crise_focus_site_id` + ancre `data-crise-site` DINUM présente).
+2. **Dialogue « Déclarer une crise »** : boutons Annuler/Enregistrer fixés
+   visibles en bas (contenu en zone scrollable interne `flex-1 min-h-0
+   overflow-y-auto`, barre de boutons `flex-none` hors du scroll).
+3. **Badge site sur chaque carte PCO** (`view.py`) : `🏢 <CODE>` (crise de
+   niveau site) ou `🌍 Nationale`, via map id→code des sites. Vérifié en
+   simulation : badge « 🏢 DINUM » présent sur la carte F082.
+4. **Bug BDD trouvé dans les logs DEV** : les catégories `INITIALISATION` et
+   `AFFECTATION` (création/activation/affectation de crise) étaient **refusées
+   par le check `chk_categorie_valid`** (SQLSTATE 23514) → événements non
+   journalisés. Corrigé : activation → `ALERTE`, création → `INFORMATION`,
+   affectation → `DECISION` + **repli applicatif** dans
+   `consigner_main_courante` (si 23514 → une reprise avec `INFORMATION`,
+   l'événement n'est jamais perdu). `sql/migration_categories.sql` proposé
+   pour autoriser nativement les catégories terrain (RONDE, INCIDENT,
+   PRISE_DE_POSTE, ANOMALIE) — à appliquer dans le SQL Editor Supabase.
+
+Re-vérifié : `py_compile` OK, reload à chaud DEV OK (`/login` 200),
+`_test_branchement_mc.py` **TEST_BRANCHEMENT_OK** (kiosk DINUM affiche le
+badge « Cellule : CRISE-2026-F082 » — la cellule liée est bien détectée côté
+poste de garde), `_test_clic_reel.py` **TEST_CLIC_REEL_OK**,
+`_test_login_routing.py` **TEST_ROUTING_OK**, `_test_pco_ro.py`
+**TEST_PCO_OK**.
 
 ---
 
@@ -159,8 +505,17 @@ Page `/wall` de supervision globale, en remplacement du MODE COS supprimé :
 - **Messagerie = Brevo** (API REST port 443, clé `BREVO_API_KEY`
   `xkeysib-...`, jamais dans git) : secrets `BREVO_API_KEY` et
   `SENDER_EMAIL` posés sur Fly le 13/11 soir → la diffusion e-mail des
-  SITREP est armée en PROD (recette d'envoi réel à faire avec le
-  prochain SITREP : bouton « DIFFUSER AU SG (EMAIL) »).
+  SITREP est armée en PROD.
+- **Recette d'envoi RÉEL faite le 14/11 (DEV)** : `_test_brevo_send.py`
+  (nouveau, envoi autorisé vers `erickuter@gmail.com`) a envoyé le SITREP
+  #3 de CRISE-2026-EC32 via `NotificationService.send_sitrep_email` →
+  `{'success': 1, 'failed': 0}`, log « E-mail délivré avec succès ».
+  **TEST_BREVO_SEND_OK** — la chaîne Brevo fonctionne (clé `.env` local OK,
+  expéditeur `notification.aditus@gmail.com`). Note : 1er essai en échec
+  à cause d'un artefact de script standalone (console cp1252 + emoji dans
+  les prints → UnicodeEncodeError avant l'appel réseau ; `main.py`
+  reconfigure déjà stdout en UTF-8 au démarrage de l'app, donc sans impact
+  en production).
 
 ---
 
@@ -339,12 +694,50 @@ depuis l'application juste après :
    ces anomalies en `RESOLU` si les pannes sont réparées — ou acter un
    chantier « clôture automatique des anomalies au retour au vert ».
 
-## Prochaine action précise
+## Problèmes connus
 
-1. Recette navigateur Main Courante (si non déjà faite ce 13/11) — à
-   l'occasion, vérifier `activated_at` écrit à la prochaine activation et
-   `type_sitrep` sur un nouveau SITREP FDJ.
-2. Chantier suivant au choix : branchement direct « Cellules de Crise »
-   depuis le cockpit, ou Main Courante terrain (`app/ui/site_agent.py`).
-3. Suivre la prod : `flyctl status`, `flyctl logs` ; prochaine action
-   Fly seulement sur demande explicite (secrets SMTP par exemple).
+6. **14/11 ~16:19 NC — toast « Connection lost. Trying to reconnect... »** :
+   diagnostic effectué — la **prod Fly.io est saine** (machine `784756dc5e3758`
+   `started`, health checks passing, `/login` 200, handshake Socket.IO
+   `/_nicegui_ws/socket.io/` → 200 avec `upgrades:["websocket"]` ; aucun crash
+   dans les logs depuis le déploiement du 13/11 08:39Z). **Aucun serveur ne
+   tourne en local sur 8080** (curl → 000) : le serveur DEV avait été arrêté
+   proprement en fin de séance. Cause la plus probable : onglet ouvert sur
+   `localhost:8080` alors que le serveur DEV était arrêté → toast NiceGUI
+   classique. **Non lié au code du 14/11** (ni committé ni déployé ; la prod
+   tourne l'image du 13/11). Correctif : relancer le serveur DEV puis F5.
+7. **14/11 ~17:59–18:13 NC — « Erreur affectation en BDD »** (toutes fonctions
+   du sélecteur sauf Agent/Chef de cellule/Responsable de cellule) :
+   `centaure_crise_membres` a un check `chk_fonction_valid` fermé (SQLSTATE
+   23514 dans `_dev_server.log`). Corrigé : **repli applicatif** dans
+   `affecter_membre_crise` (23514 → reprise avec 'Agent') + migration
+   `sql/migration_fonctions_crise.sql` (ouvre le check à toutes les fonctions
+   du sélecteur UI — à appliquer dans le SQL Editor Supabase ; une requête de
+   diagnostic listant toutes les contraintes CHECK du schéma public est en
+   commentaire du fichier). Scan des logs DEV : seules 2 contraintes check ont
+   bloqué à ce jour (`chk_categorie_valid`, `chk_fonction_valid`), toutes deux
+   traitées.
+
+## Prochaine action précise (15/11)
+
+1. **Relancer le serveur DEV** (`cd C:\Dev\CENTAURE && .venv\Scripts\python.exe -u main.py`,
+   fenêtre dédiée) puis **recette navigateur** : Main Courante PCO
+   (consignation, bascule SITREP, compteurs 30 s, `activated_at` à
+   l'activation, `type_sitrep` FDJ) + code du 14/11 : clic carte site →
+   onglet « Cellules de Crise » ; lier une crise à un site (champ « Site
+   impacté ») → highlight carte PCO ; kiosk du site lié → Main Courante
+   terrain, consignation « Agent <CODE> ».
+2. **3 points notés le 14/11 soir (§ PROCHAINE SÉANCE point 0)** :
+   a. SITREP en **PDF joint** à l'e-mail d'envoi ;
+   b. mail d'activation : phrase « rejoindre immédiatement » à rendre
+      conditionnelle ;
+   c. clôture/archivage cellule → **rester sur l'onglet « Cellules de Crise »**.
+3. **Migrations SQL en attente** à appliquer dans le SQL Editor Supabase :
+   `sql/migration_categories.sql` + `sql/migration_fonctions_crise.sql`
+   (les replis applicatifs 23514 couvrent déjà, les migrations ouvrent les
+   checks en natif). Nettoyer ensuite la crise de test **CRISE-2026-F082**.
+4. Commit + push des chantiers du 14/11 **sur demande explicite**, puis
+   déploiement Fly.io (`flyctl deploy --remote-only`) **sur demande explicite**.
+5. Révoquer le mot de passe applicatif Gmail côté Google (hygiène, §
+   Sécurité) ; brancher l'écran physique de la salle PCO sur `/wall?token=...`.
+6. Suivre la prod : `flyctl status`, `flyctl logs`.

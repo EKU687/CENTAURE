@@ -381,6 +381,27 @@ class DatabaseService:
             return []
 
     @staticmethod
+    def get_active_crise_for_site(site_id: str) -> Optional[Dict[str, Any]]:
+        """Cellule de crise active (ACTIVEE/EN_SOMMEIL) rattachée à un site donné
+        (crise « de niveau site » via site_impacte_id), la plus récente.
+        Retourne None si aucune crise n'est liée au site (crise nationale ou aucune)."""
+        try:
+            res = run_supabase(
+                lambda: supabase.table("centaure_crises")
+                .select("*")
+                .eq("site_impacte_id", str(site_id))
+                .in_("statut", ["ACTIVEE", "EN_SOMMEIL"])
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute(),
+                "lecture crise liée au site",
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"❌ Erreur récupération crise du site : {e}")
+            return None
+
+    @staticmethod
     def get_crise_by_id(crise_id: str) -> Optional[Dict[str, Any]]:
         """Récupère une crise par son UUID."""
         try:
@@ -416,8 +437,13 @@ class DatabaseService:
         lieu_pc: Optional[str] = None,
         statut: Optional[str] = None,
         activated_at: Optional[str] = None,
+        site_impacte_id: Optional[str] = None,
     ) -> bool:
-        """Mise à jour des informations de crise."""
+        """Mise à jour des informations de crise.
+
+        site_impacte_id : ID du site rattaché (crise « de niveau site ») ;
+        chaîne vide -> NULL (crise nationale, aucun site). None = ne pas toucher.
+        """
         try:
             payload = {}
             if titre is not None:
@@ -434,6 +460,9 @@ class DatabaseService:
                 payload["statut"] = statut.strip()
             if activated_at is not None:
                 payload["activated_at"] = activated_at
+            if site_impacte_id is not None:
+                # Chaîne vide => remise à NULL (crise nationale).
+                payload["site_impacte_id"] = site_impacte_id or None
 
             if not payload:
                 return True
@@ -540,6 +569,30 @@ class DatabaseService:
                 return res.data[0]
             return None
         except Exception as e:
+            # Repli : si la catégorie est refusée par le check constraint BDD
+            # (SQLSTATE 23514), une unique reprise avec 'INFORMATION'.
+            if "23514" in str(e) or "chk_categorie_valid" in str(e):
+                print(
+                    f"⚠️ [MAIN COURANTE] Catégorie {payload.get('categorie')!r} refusée "
+                    "par le check BDD — repli sur 'INFORMATION'."
+                )
+                payload["categorie"] = "INFORMATION"
+                try:
+                    res = run_supabase(
+                        lambda: supabase.table("centaure_main_courante")
+                        .insert(payload)
+                        .execute(),
+                        "insertion main courante (repli categorie)",
+                    )
+                    if res.data:
+                        print(
+                            f"📜 [MAIN COURANTE] Log inséré (repli) ID: {res.data[0].get('id')}"
+                        )
+                        return res.data[0]
+                    return None
+                except Exception as e2:
+                    print(f"❌ Erreur insertion main courante (repli) : {e2}")
+                    return None
             print(f"❌ Erreur insertion centaure_main_courante : {e}")
             return None
 
@@ -650,16 +703,28 @@ class DatabaseService:
     @staticmethod
     def affecter_membre_crise(crise_id: str, personne_id: str, fonction: str) -> bool:
         """Affectation RH."""
+        payload = {
+            "crise_id": str(crise_id),
+            "personne_id": str(personne_id),
+            "fonction_crise": fonction,
+        }
         try:
-            supabase.table("centaure_crise_membres").insert(
-                {
-                    "crise_id": str(crise_id),
-                    "personne_id": str(personne_id),
-                    "fonction_crise": fonction,
-                }
-            ).execute()
+            supabase.table("centaure_crise_membres").insert(payload).execute()
             return True
         except Exception as e:
+            # Repli : si la fonction est refusée par le check BDD (SQLSTATE
+            # 23514 / chk_fonction_valid), une unique reprise avec 'Agent'.
+            if "23514" in str(e) or "chk_fonction_valid" in str(e):
+                print(
+                    f"⚠️ Fonction {fonction!r} refusée par le check BDD — repli sur 'Agent'."
+                )
+                payload["fonction_crise"] = "Agent"
+                try:
+                    supabase.table("centaure_crise_membres").insert(payload).execute()
+                    return True
+                except Exception as e2:
+                    print(f"⚠️ Erreur affectation (repli) : {e2}")
+                    return False
             print(f"⚠️ Erreur affectation : {e}")
             return False
 
@@ -884,6 +949,162 @@ class DatabaseService:
             return None
         except Exception as e:
             print(f"❌ Erreur lors de l'authentification YubiKey : {e}")
+            return None
+
+
+    # =========================================================================
+    # 📎 PIÈCES JOINTES DE CRISE (upload / édition / suppression)
+    # =========================================================================
+
+    BUCKET_FICHIERS_CRISE = "centaure-crise-fichiers"
+
+    @staticmethod
+    def _sanitize_nom_fichier(nom: str) -> str:
+        """Nom de fichier sûr pour le storage : sans accents/espaces, ext conservée."""
+        import re
+        import unicodedata
+
+        base = unicodedata.normalize("NFKD", str(nom or "fichier"))
+        base = "".join(c for c in base if not unicodedata.combining(c))
+        base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+        if not base:
+            base = "fichier"
+        return base[:100]
+
+    @staticmethod
+    def get_fichiers_crise(crise_id: str) -> List[Dict[str, Any]]:
+        """Liste les pièces jointes d'une crise (les plus récentes d'abord)."""
+        try:
+            res = run_supabase(
+                lambda: supabase.table("centaure_crise_fichiers")
+                .select("*")
+                .eq("crise_id", str(crise_id))
+                .order("created_at", desc=True)
+                .execute(),
+                "lecture fichiers crise",
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"❌ Erreur lecture fichiers crise : {e}")
+            return []
+
+    @staticmethod
+    def upload_fichier_crise(
+        crise_id: str,
+        nom_fichier: str,
+        contenu: bytes,
+        mime: str = "",
+        commentaire: str = "",
+        uploade_par: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Upload le binaire dans le bucket Storage puis insère la métadonnée en BDD.
+        Retourne la ligne créée, None si échec."""
+        try:
+            nom_sain = DatabaseService._sanitize_nom_fichier(nom_fichier)
+            storage_path = f"crise-{crise_id}/{uuid.uuid4().hex[:8]}_{nom_sain}"
+
+            supabase.storage.from_(DatabaseService.BUCKET_FICHIERS_CRISE).upload(
+                path=storage_path,
+                file=contenu,
+                file_options={
+                    "content-type": mime or "application/octet-stream",
+                    "upsert": "false",
+                },
+            )
+
+            payload = {
+                "crise_id": str(crise_id),
+                "nom_fichier": str(nom_fichier or nom_sain)[:255],
+                "storage_path": storage_path,
+                "mime": mime or None,
+                "taille_octets": len(contenu) if contenu else None,
+                "commentaire": (commentaire or "").strip() or None,
+                "uploade_par": (uploade_par or "").strip() or None,
+            }
+            res = run_supabase(
+                lambda: supabase.table("centaure_crise_fichiers")
+                .insert(payload)
+                .execute(),
+                "insertion métadonnée fichier crise",
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"❌ Erreur upload fichier crise : {e}")
+            return None
+
+    @staticmethod
+    def update_fichier_crise(
+        fichier_id: str,
+        nom_fichier: Optional[str] = None,
+        commentaire: Optional[str] = None,
+    ) -> bool:
+        """Modifie le nom affiché et/ou le commentaire d'une pièce jointe."""
+        try:
+            payload: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+            if nom_fichier is not None:
+                payload["nom_fichier"] = str(nom_fichier).strip()[:255] or None
+            if commentaire is not None:
+                payload["commentaire"] = commentaire.strip() or None
+            if not payload:
+                return True
+            run_supabase(
+                lambda: supabase.table("centaure_crise_fichiers")
+                .update(payload)
+                .eq("id", str(fichier_id))
+                .execute(),
+                "mise à jour fichier crise",
+            )
+            return True
+        except Exception as e:
+            print(f"❌ Erreur modification fichier crise : {e}")
+            return False
+
+    @staticmethod
+    def supprimer_fichier_crise(fichier_id: str) -> bool:
+        """Supprime une pièce jointe : d'abord le binaire Storage, puis la ligne BDD."""
+        try:
+            res = run_supabase(
+                lambda: supabase.table("centaure_crise_fichiers")
+                .select("id, storage_path")
+                .eq("id", str(fichier_id))
+                .execute(),
+                "lecture fichier avant suppression",
+            )
+            lignes = res.data or []
+            if not lignes:
+                return False
+            storage_path = lignes[0].get("storage_path")
+
+            if storage_path:
+                try:
+                    supabase.storage.from_(
+                        DatabaseService.BUCKET_FICHIERS_CRISE
+                    ).remove([storage_path])
+                except Exception as e:
+                    print(f"⚠️ Suppression storage échouée (on supprime quand même la ligne) : {e}")
+
+            run_supabase(
+                lambda: supabase.table("centaure_crise_fichiers")
+                .delete()
+                .eq("id", str(fichier_id))
+                .execute(),
+                "suppression ligne fichier crise",
+            )
+            return True
+        except Exception as e:
+            print(f"❌ Erreur suppression fichier crise : {e}")
+            return False
+
+    @staticmethod
+    def url_signee_fichier_crise(storage_path: str, expires: int = 3600) -> Optional[str]:
+        """URL signée temporaire (1 h par défaut) pour télécharger une pièce jointe."""
+        try:
+            res = supabase.storage.from_(DatabaseService.BUCKET_FICHIERS_CRISE).create_signed_url(
+                storage_path, expires
+            )
+            return (res or {}).get("signedURL")
+        except Exception as e:
+            print(f"❌ Erreur URL signée fichier crise : {e}")
             return None
 
 

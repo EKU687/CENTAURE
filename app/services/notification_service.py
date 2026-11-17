@@ -1,9 +1,29 @@
 import asyncio
+import base64
 import os
 import json
 import urllib.request
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv, find_dotenv
+
+from app.services.pdf_service import build_sitrep_pdf
+
+
+def _phrase_convocation(niveau) -> str:
+    """Phrase de convocation adaptée au niveau de gravité de la crise :
+    gravité élevée (3/4, CRITIQUE, MAJEURE, S4...) -> convocation immédiate ;
+    gravité faible (1/2, suivi, veille) -> simple information, on se tient prêt."""
+    n = str(niveau or "").upper().strip()
+    digits = "".join(ch for ch in n if ch.isdigit())
+    urgence = (digits != "" and int(digits) >= 3) or any(
+        mot in n for mot in ("CRITIQUE", "MAJEURE", "GRAVE", "S4")
+    )
+    if urgence:
+        return "Vous êtes prié(e) de rejoindre immédiatement le PC Crise désigné."
+    return (
+        "Prenez connaissance de cette activation et tenez-vous prêt(e) à être "
+        "mobilisé(e) si la situation venait à évoluer."
+    )
 
 # Rechargement forcé des variables d'environnement (.env)
 load_dotenv(find_dotenv(), override=True)
@@ -13,7 +33,11 @@ class NotificationService:
 
     @staticmethod
     def _send_email_via_api_sync(
-        recipient: str, subject: str, html_content: str
+        recipient: str,
+        subject: str,
+        html_content: str,
+        attachment_name: Optional[str] = None,
+        attachment_bytes: Optional[bytes] = None,
     ) -> bool:
         """
         Envoi d'e-mail via l'API REST HTTPS de Brevo (Port 443).
@@ -41,6 +65,15 @@ class NotificationService:
             "subject": subject,
             "htmlContent": html_content,
         }
+
+        # Pièce jointe (ex : PDF du SITREP) — attendue par Brevo en base64.
+        if attachment_name and attachment_bytes:
+            payload["attachment"] = [
+                {
+                    "name": attachment_name,
+                    "content": base64.b64encode(attachment_bytes).decode("ascii"),
+                }
+            ]
 
         try:
             print(f"🔄 Envoi API REST Brevo vers {recipient}...")
@@ -70,13 +103,21 @@ class NotificationService:
             return False
 
     @staticmethod
-    async def send_email_async(recipient: str, subject: str, html_content: str) -> bool:
+    async def send_email_async(
+        recipient: str,
+        subject: str,
+        html_content: str,
+        attachment_name: Optional[str] = None,
+        attachment_bytes: Optional[bytes] = None,
+    ) -> bool:
         """Enveloppe asynchrone non-bloquante exécutée dans un thread pour NiceGUI."""
         return await asyncio.to_thread(
             NotificationService._send_email_via_api_sync,
             recipient,
             subject,
             html_content,
+            attachment_name,
+            attachment_bytes,
         )
 
     @staticmethod
@@ -129,7 +170,7 @@ class NotificationService:
                     <li><strong>Lieu / PC Ralliement :</strong> <span style="color: #005599; font-weight: bold;">{lieu_display}</span></li>
                     <li><strong>Description :</strong> {description}</li>
                 </ul>
-                <p>Vous êtes prié(e) de rejoindre immédiatement le PC Crise désigné.</p>
+                <p>{_phrase_convocation(niveau)}</p>
                 <hr>
                 <p style="font-size: 0.8em; color: #777;">Message automatique généré par le Système CENTAURE.</p>
             </body>
@@ -189,7 +230,7 @@ class NotificationService:
                 <li><strong>Lieu / PC Ralliement :</strong> <span style="color: #005599; font-weight: bold;">{lieu_display}</span></li>
                 <li><strong>Description :</strong> {description}</li>
             </ul>
-            <p>Vous êtes prié(e) de rejoindre immédiatement le PC Crise désigné.</p>
+            <p>{_phrase_convocation(niveau)}</p>
             <hr>
             <p style="font-size: 0.8em; color: #777;">Message automatique généré par le Système CENTAURE.</p>
         </body>
@@ -267,6 +308,22 @@ class NotificationService:
         </html>
         """
 
+        # Pièce jointe PDF du bulletin SITREP (génération pure Python, sans
+        # dépendance externe). En cas d'échec, l'e-mail part sans la PJ.
+        pdf_name = f"SITREP_{code_crise}_n{num_sitrep}.pdf"
+        pdf_bytes = None
+        try:
+            pdf_bytes = build_sitrep_pdf(crise_data, sitrep_data)
+            print(
+                f"📎 [CENTAURE API SITREP] PDF généré ({len(pdf_bytes)} octets) :"
+                f" {pdf_name}"
+            )
+        except Exception as pdf_err:
+            print(
+                "⚠️ [CENTAURE API SITREP] Génération PDF échouée, e-mail envoyé"
+                f" sans pièce jointe : {pdf_err}"
+            )
+
         tasks = []
         for dest in destinataires:
             email_addr = dest.get("email")
@@ -274,7 +331,13 @@ class NotificationService:
                 continue
 
             tasks.append(
-                NotificationService.send_email_async(email_addr, subject, html_content)
+                NotificationService.send_email_async(
+                    email_addr,
+                    subject,
+                    html_content,
+                    attachment_name=pdf_name if pdf_bytes else None,
+                    attachment_bytes=pdf_bytes,
+                )
             )
 
         if not tasks:

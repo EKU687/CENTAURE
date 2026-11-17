@@ -16,6 +16,20 @@ from app.ui.crises.fin_de_journee_dialog import open_fin_de_journee_dialog
 
 LOCAL_TZ = ZoneInfo("Pacific/Noumea")
 
+# Échelle fixe des gravités de crise : N1 bleu, N2 ambre, N3 orange, N4 rouge.
+GRAVITE_STYLES = {
+    "1": ("text-blue-400", "blue"),
+    "2": ("text-amber-400", "amber"),
+    "3": ("text-orange-400", "orange"),
+    "4": ("text-red-400", "red"),
+}
+
+
+def gravite_styles(niveau) -> tuple:
+    """Retourne (classe texte Tailwind, couleur badge Quasar) pour une gravité."""
+    n = str(niveau or "1").replace("N", "").strip() or "1"
+    return GRAVITE_STYLES.get(n, ("text-slate-400", "grey"))
+
 
 class _DialogStub:
     """Stub de dialogue pour l'activation lancée depuis la carte PCO
@@ -165,17 +179,25 @@ async def render_crises_view(is_sg_admin: bool = False):
         gravite_libelle = (
             f"N{gravite_max}" if crises and gravite_max not in ("0", "") else "—"
         )
-        for label, valeur, couleur in [
-            ("Cellules ACTIVÉES", str(len(activ)), "red"),
-            ("Cellules en VEILLE", str(len(sommeil)), "amber"),
-            ("Gravité maximale", gravite_libelle, "purple"),
+        g_txt, _g_badge = gravite_styles(gravite_max)
+        for label, valeur, txt_cls in [
+            ("Cellules ACTIVÉES", str(len(activ)), "text-red-400"),
+            ("Cellules en VEILLE", str(len(sommeil)), "text-amber-400"),
+            ("Gravité maximale", gravite_libelle, g_txt),
         ]:
             with ui.card().classes(
                 "flex-1 min-w-[140px] bg-slate-800/60 border border-slate-700 p-3 "
                 "items-center text-center"
             ):
-                ui.label(valeur).classes(f"text-3xl font-black text-{couleur}-400")
+                ui.label(valeur).classes(f"text-3xl font-black {txt_cls}")
                 ui.label(label).classes("text-[11px] text-slate-400 uppercase tracking-wider")
+
+        with ui.row().classes("w-full items-center gap-2 mb-4 text-[10px] text-slate-500"):
+            ui.label("Légende gravité :").classes("font-bold text-slate-400")
+            for n in ["1", "2", "3", "4"]:
+                ui.badge(f"N{n}", color=gravite_styles(n)[1]).classes(
+                    "text-[9px] font-mono"
+                )
 
     if not crises:
         with ui.card().classes(
@@ -232,9 +254,9 @@ async def render_crises_view(is_sg_admin: bool = False):
                         ui.label(c_titre).classes(
                             "text-xl font-bold text-slate-100"
                         )
-                        ui.badge(f"Gravité {c_gravite}", color="purple").classes(
-                            "font-bold"
-                        )
+                        ui.badge(
+                            f"Gravité {c_gravite}", color=gravite_styles(c_gravite)[1]
+                        ).classes("font-bold")
                         ui.badge(c_type, color="grey-8").classes("text-[10px]")
                         site_lie = sites_map.get(str(crise.get("site_impacte_id") or ""))
                         if site_lie:
@@ -347,7 +369,7 @@ async def render_crises_view(is_sg_admin: bool = False):
                 ui.button(
                     icon="attach_file",
                     on_click=lambda c=crise: open_fichiers_crise_dialog(c),
-                ).props("color=amber sm font-bold").tooltip("Pièces jointes de la crise")
+                ).props("color=blue sm font-bold").tooltip("Pièces jointes de la crise")
 
                 ui.button(
                     "SITREP",

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import traceback
 from nicegui import app, ui
 from app.core import config
@@ -570,6 +571,13 @@ async def create_cockpit_page():
                 ui.badge(config.DISPLAY_VERSION, color="slate-800").classes(
                     "text-[10px] font-mono border border-slate-700 text-slate-300 px-2 py-0.5 ml-1"
                 )
+                _env = os.getenv("APP_ENV", os.getenv("ENV", "development")).upper()
+                ui.badge(
+                    f"ENV {_env}",
+                    color="positive" if _env in ("PRODUCTION", "PROD") else "warning",
+                ).classes(
+                    "text-[10px] font-mono border border-slate-700 px-2 py-0.5 ml-1"
+                ).tooltip("Environnement d'exécution (APP_ENV)")
 
             with ui.tabs().classes("text-white") as tabs:
                 tab_sites = None
@@ -667,7 +675,7 @@ async def create_cockpit_page():
                             "Écran mural",
                             icon="monitor",
                             on_click=open_wall_link_dialog,
-                        ).props("color=amber sm outline font-bold").tooltip(
+                        ).props("color=blue sm outline font-bold").tooltip(
                             "URL d'installation de l'écran de supervision globale (salle PCO)"
                         )
 
@@ -926,6 +934,26 @@ async def create_cockpit_page():
                     "update:model-value", lambda e: render_sites_grid(e.value)
                 )
                 render_sites_grid()
+
+                with ui.row().classes(
+                    "w-full items-center gap-2 mt-6 flex-wrap text-[10px] text-slate-500"
+                ):
+                    ui.label("LÉGENDE").classes(
+                        "font-bold text-slate-400 tracking-wider text-[10px]"
+                    )
+                    ui.badge("S1 / T1 — niveau nominal", color="positive").classes(
+                        "text-[9px]"
+                    )
+                    ui.badge(
+                        "S2 / T2 — surveillance renforcée (bordure ambre)",
+                        color="warning",
+                    ).classes("text-[9px]")
+                    ui.badge("S3 / T3 — alerte (carte ambre)", color="orange-8").classes(
+                        "text-[9px]"
+                    )
+                    ui.badge(
+                        "S4 / T4 — confinement en cours (carte rouge)", color="negative"
+                    ).classes("text-[9px]")
 
         # ONGLET 2 : CELLULES DE CRISE SG
         if can_access_crises and tab_crises:

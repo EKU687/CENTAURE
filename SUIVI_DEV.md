@@ -212,6 +212,31 @@ Tests (17/11) :
 - **Décision 17/11 soir (validation utilisateur)** : la **v34 en PROD a été
   vérifiée par l'utilisateur → on la garde** (pas de rollback vers la v33).
 
+### 17/11 (suite 4) — Harmonisation des couleurs (demande utilisateur, test local avant PROD)
+
+Objectif : moins de familles de couleurs, sémantique fixe, lisible en démo
+(président/cabinet). Appliqué :
+1. **Échelle de gravité fixe** `gravite_styles()` dans `app/ui/crises/view.py` :
+   N1 = bleu, N2 = ambre, N3 = orange, N4 = rouge — appliquée au compteur
+   « Gravité maximale » du PCO et au badge « Gravité N » de chaque carte crise
+   (le violet disparaît).
+2. **Ambre réservé à l'attention** : bouton 📎 Pièces jointes et bouton
+   « ÉCRAN MURAL » passés en **bleu** (`view.py`, `cockpit.py`).
+3. **Légendes** : pied de l'onglet « Sites Sensibles » (S1/T1 nominal vert,
+   S2/T2 surveillance renforcée = bordure ambre, S3/T3 alerte = carte ambre,
+   S4/T4 confinement = carte rouge) et bandeau PCO (Légende gravité N1–N4).
+4. **Badge d'environnement** discret dans le header à côté de la version :
+   « ENV PRODUCTION » (vert) / « ENV DEVELOPMENT » (ambre), lu depuis `APP_ENV`.
+
+Tests (17/11, serveur DEV relancé sur localhost:8080) :
+- `py_compile` `cockpit.py` + `view.py` : OK.
+- Suite read-only : TEST_ROUTING_OK, TEST_CLIC_REEL_OK, TEST_PCO_OK,
+  TEST_SITE_CRISE_RO_OK.
+- Nouveau `_test_couleurs_ro.py` (login ADMIN simulé, vrais éléments UI) :
+  **TEST_COULEURS_OK** — badge ENV, légendes sites/gravité, badges N1–N4,
+  badge « Gravité 2 » en ambre, boutons Écran mural + PJ en bleu.
+- Smoke HTTP 7/7 → 200. Recette navigateur à faire côté utilisateur.
+
 ---
 
 ## 🔄 PROCHAINE SÉANCE — À FAIRE DANS L'ORDRE

@@ -237,6 +237,23 @@ Tests (17/11, serveur DEV relancé sur localhost:8080) :
   badge « Gravité 2 » en ambre, boutons Écran mural + PJ en bleu.
 - Smoke HTTP 7/7 → 200. Recette navigateur à faire côté utilisateur.
 
+### 17/11 (suite 5) — Validation locale, commit, push et déploiement PROD v35
+
+- **Validé par l'utilisateur en local** (cockpit localhost:8080) → commit
+  **`0456890`** `feat(ui): harmonisation des couleurs` (cockpit.py, view.py,
+  SUIVI_DEV.md).
+- Serveur DEV arrêté proprement avant le deploy (port 8080 → 000).
+- **Déploiement PROD Fly.io v35** le 17/11 ~07:32 UTC :
+  `flyctl deploy --remote-only -a gnc-centaure` → exit 0, machine
+  `784756dc5e3758` en **version 35**, `started`, 1 check passing, image
+  `gnc-centaure:deployment-01M7M6NV3YGM4FDS2YJ3F0F6Y8` (191 Mo).
+- **Recette en ligne** https://gnc-centaure.fly.dev : 8 routes → **8/8 en 200**
+  (`/`, `/login`, `/kiosk`, `/wall`, `/kiosk?token=invalide`,
+  `/wall?token=<DINUM>`, `/kiosk?token=<DINUM>`, `/site/DINUM`) ; logs prod :
+  « CENTAURE Démarré | Mode: PRODUCTION | Port: 8080 » + health check passing.
+- **Push `origin main`** effectué après le deploy (commits `34c6e0c`,
+  `0456890` + commit docs de clôture) — `git log origin/main..main` vide.
+
 ---
 
 ## 🔄 PROCHAINE SÉANCE — À FAIRE DANS L'ORDRE

@@ -254,6 +254,18 @@ Tests (17/11, serveur DEV relancé sur localhost:8080) :
 - **Push `origin main`** effectué après le deploy (commits `34c6e0c`,
   `0456890` + commit docs de clôture) — `git log origin/main..main` vide.
 
+### 17/11 (suite 6) — Incrémentation de version v1.1.0
+
+- `app/core/config.py` : `APP_VERSION` 1.0.0 → **1.1.0** (MINOR : PJ par crise,
+  PDF SITREP, harmonisation couleurs, badge env), `APP_DATE` → 17/11/2026.
+- `DISPLAY_VERSION` alimente déjà le **badge du header cockpit** et le
+  **footer de la page de login** (« Gouvernement de la Nouvelle-Calédonie •
+  v1.1.0 ») — la version était donc déjà présente sur le login, aucun changement
+  UI nécessaire de ce côté.
+- Test local (serveur DEV relancé sur localhost:8080) : `/login` → 200 et
+  contient « v1.1.0 » ; `config.DISPLAY_VERSION == "v1.1.0"` ; `py_compile` OK.
+- Commit local ; push + deploy PROD (v36) sur feu vert utilisateur.
+
 ---
 
 ## 🔄 PROCHAINE SÉANCE — À FAIRE DANS L'ORDRE

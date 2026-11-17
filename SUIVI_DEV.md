@@ -264,7 +264,12 @@ Tests (17/11, serveur DEV relancé sur localhost:8080) :
   UI nécessaire de ce côté.
 - Test local (serveur DEV relancé sur localhost:8080) : `/login` → 200 et
   contient « v1.1.0 » ; `config.DISPLAY_VERSION == "v1.1.0"` ; `py_compile` OK.
-- Commit local ; push + deploy PROD (v36) sur feu vert utilisateur.
+- Commit `4bb9a0c` ; **push + déploiement PROD v36 effectués le 17/11 ~07:40
+  UTC** (feu vert) : machine `784756dc5e3758` en **version 36**, `started`,
+  1 check passing, image `gnc-centaure:deployment-01M7M75MD0ZJJD9J0JMHWETSYD`.
+- Recette en ligne https://gnc-centaure.fly.dev : **8/8 → 200** ; la page
+  `/login` affiche « Gouvernement de la Nouvelle-Calédonie • **v1.1.0** » ;
+  logs prod « Mode: PRODUCTION » + health check passing (07:40:55 UTC).
 
 ---
 

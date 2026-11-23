@@ -3,7 +3,7 @@
 **Date de reprise :** Demain matin (Environnement Bureau / Multi-écrans)  
 **Statut Global :**  **PRODUCTION STABLE & VALIDÉE**  
 **Hébergement :** Fly.io (`https://gnc-centaure.fly.dev` — Région Sydney `syd`)  
-**Base de données :** Supabase (`centaure_sites`, `centaure_protocoles`, sessions)  
+**Base de données :** Supabase (`centaure_sites` — avec `active_protocol_id` et `protocole_confinement`, `centaure_site_protocols`, `centaure_ref_protocols`, `centaure_crises`, sessions)  
 **Architecture UI :** NiceGUI (FastAPI + WebSockets)  
 
 ---
@@ -38,6 +38,19 @@ La session d'aujourd'hui a permis de résoudre définitivement les blocages d'in
 | **Cockpit Central** | **Opérationnel** | `https://gnc-centaure.fly.dev/` |
 | **Poste de Garde DINUM** | **Opérationnel** | `https://gnc-centaure.fly.dev/kiosk?token=...` |
 | **Dépôt Git** | **Propre & synchronisé** | `main` à jour, `.gitignore` blindé |
+
+### Protocoles de posture par site (v1.2.0 — 23/11/2026)
+- **Saisie** : cockpit → carte site → « Gérer » → section « 📖 Protocoles du site » →
+  ajouter / modifier / supprimer des protocoles par niveau **S1–S4 / T1–T4**
+  (table `centaure_site_protocols` : `site_code`, `niveau`, `titre`, `consignes` ;
+  FK `fk_site_code` vers `centaure_sites`).
+- **Activation** : au changement de niveau S/T, le select « Protocole à appliquer
+  pour cette posture » écrit `centaure_sites.active_protocol_id`.
+- **Affichage poste de garde** : kiosk affiche « PROTOCOLE EN VIGUEUR » lu via
+  `get_active_protocol_for_site` (fallback : protocole du niveau courant, puis
+  `protocole_confinement` en S4 — ce texte par défaut est éditable dans la fiche site).
+- **Référentiel transverse** : `centaure_ref_protocols` existe (modèles admin) mais
+  reste vide / sans UI à ce jour.
 
 ---
 

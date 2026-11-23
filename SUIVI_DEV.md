@@ -1,13 +1,94 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 17/11/2026 soir — push GitHub + déploiement PROD
-Fly.io v34 effectués et recette en ligne OK (voir § Séance du 17/11, suite 3)
+**Dernière mise à jour :** 23/11/2026 — éditeur de protocoles par site (v1.2.0) :
+recette navigateur VALIDÉE, **commit local effectué** — **push GitHub + déploiement
+PROD Fly.io EN ATTENTE** (à faire depuis le domicile, voir § Séance du 23/11, suite) ;
+avant : 17/11/2026 soir push + déploiement PROD v36 (recette OK)
 **Branche :** `main` — refonte PCO + fin COS + écran mural **committés et
 poussés** ( **Serveur DEV local ARRÊTÉ proprement le 14/11 au soir** — port
 8080 libéré (curl → 000) ; relance demain :
 `cd C:\Dev\CENTAURE && .venv\Scripts\python.exe -u main.py`,
 fenêtre dédiée, `PYTHONUNBUFFERED=1` si redirigé, logs dans `_dev_server.log` ;
 migration Supabase appliquée ; voir § Déploiement du 13/11 )
+
+---
+
+## 🗓️ Séance du 23/11 — Éditeur de protocoles par site (v1.2.0, non committé)
+
+**Demande :** pouvoir saisir les protocoles S1–S4 (et T1–T4) d'un site
+**depuis l'application**, sans passer par le SQL Editor Supabase.
+Contexte : la table `centaure_site_protocols` (site_code, niveau, titre,
+consignes) existait déjà (DINUM S1–S4, DOUMER S1 + 3×S2) et le select
+« Protocole à appliquer pour cette posture » du dialogue site existait, mais
+**aucune UI** n'appelait `save_site_protocol` / `delete_site_protocol`.
+
+Décisions :
+- Éditeur intégré au dialogue « Gérer » du site (cockpit), nouvelle section
+  **2b « 📖 Protocoles du site <CODE> — niveaux S1-S4 / T1-T4 »** :
+  liste des protocoles du site (badge niveau coloré, titre, consignes
+  tronquées), boutons **Modifier / Supprimer** par ligne, bouton
+  **➕ Ajouter un protocole** → sous-dialogue (select niveau S1–S4/T1–T4,
+  titre, consignes multi-lignes) → `save_site_protocol` ; suppression avec
+  confirmation → `delete_site_protocol`. Après chaque action : refresh de la
+  liste + du select de posture (`load_protocols_for_select`).
+- Chargement initial au `show` du dialogue : handler combiné
+  `_on_dialog_show` = `load_protocols_for_select()` + `refresh_protocols_list()`.
+- Section 2 « Fiche & Identité » : ajout d'un **textarea « Protocole de
+  confinement S4 »** (`centaure_sites.protocole_confinement`, texte par défaut
+  affiché au poste de garde en S4) — `update_info_base` le passe désormais à
+  `update_site_info` au lieu de `None`.
+- `centaure_site_protocols.site_code` a une **FK vers centaure_sites**
+  (`fk_site_code`, 23503) — un protocole ne peut être créé que pour un site
+  existant (comportement natif, OK).
+- Version : `APP_VERSION` 1.1.0 → **1.2.0**, `APP_DATE` 23/11/2026
+  (`app/core/config.py`).
+- Le référentiel admin `centaure_ref_protocols` (modèles transverses) reste
+  vide et sans UI — chantier ultérieur non demandé.
+
+Fichiers modifiés :
+- `app/ui/cockpit.py` (extraction `protocole_confinement`, textarea S4,
+  section 2b éditeur complet, handler show combiné)
+- `app/core/config.py` (v1.2.0)
+- `SUIVI_DEV.md`
+
+Tests exécutés (23/11) :
+- `py_compile` cockpit.py + config.py : OK.
+- `_test_proto_editor_ro.py` (nouveau, non commité) :
+  - **TEST_SERVICE_OK** — round-trip réel sur `centaure_site_protocols`
+    (ligne temporaire `ZZ-TEST-SUPPRIMER` sur DOUMER : insert → read →
+    update → delete → base restaurée, vérifié).
+  - **TEST_PROTO_EDITOR_OK** — simulation NiceGUI (login ADMIN stubé) :
+    dialogue « Gérer » DINUM ouvert ; expansion « Protocoles du site DINUM »,
+    bouton « Ajouter un protocole », select posture, textarea confinement S4,
+    sous-dialogue « Nouveau protocole » (select Niveau de posture S1–S4/T1–T4,
+    titre, consignes) présents ; AST : `dialog.on("show", _on_dialog_show)`,
+    appels `save_site_protocol` / `delete_site_protocol` / `get_site_protocols`
+    câblés ; BDD : DINUM a bien S1/S2/S3/S4. Sous-dialogue annulé avant
+    Enregistrer → **aucune écriture réelle** sur les vrais sites.
+  - Garde-fou `_test_login_routing.py` : **TEST_ROUTING_OK** (non-régression).
+- Note harnais : l'événement `show` du dialogue ne se rejoue pas fiablement
+  dans la simulation User (le select de posture reste vide en sim) — le
+  chargement de la liste est donc aussi vérifié par AST + service réel ;
+  à confirmer en recette navigateur.
+
+Tests non réalisés :
+- ~~Recette navigateur réelle~~ **FAITE et VALIDÉE le 23/11 par l'utilisateur**
+  (serveur DEV relancé, smoke HTTP 8/8 → 200, login affiche v1.2.0) : dialogue
+  « Gérer » DINUM → section 📖 protocoles peuplée (S1–S4) → ajouter / modifier /
+  supprimer OK ; select « Protocole à appliquer » se peuple au changement S/T ;
+  kiosk DINUM affiche toujours le protocole en vigueur.
+
+### 23/11 (suite) — Recette validée, commit local, PROD en attente
+
+- **Recette navigateur validée par l'utilisateur** (« c'est tout bon, ça a l'air correct »).
+- **Commit local effectué** (code `app/ui/cockpit.py` + `app/core/config.py`, puis commit
+  docs `SUIVI_DEV.md` / `CONTEXT.md` / `DOCS_EXPLOITATION.md` nouveau) — **pas de push**.
+- **Push `origin main` + `flyctl deploy --remote-only -a gnc-centaure` : EN ATTENTE** —
+  à faire depuis le domicile (décision utilisateur 23/11). Serveur DEV laissé tournant
+  en local pendant la recette (port 8080) — à arrêter proprement avant le deploy.
+- Docs : `SUIVI_DEV.md` (cette entrée), `CONTEXT.md` (tables protocoles réelles +
+  fonctionnement v1.2.0), **`DOCS_EXPLOITATION.md` créé** (procédure opérateur :
+  saisir/activer les protocoles S1–S4/T1–T4, lecture kiosk, niveaux, rôles, commandes).
 
 ---
 

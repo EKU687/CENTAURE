@@ -220,6 +220,7 @@ def open_inspection_dialog(site):
             tech_val = site.get("technique_niveau", "T1")
             anomalies_list = site.get("anomalies", []) or []
             active_proto_id = site.get("active_protocol_id") or site.get("protocol_id")
+            site_protocole_conf_val = site.get("protocole_confinement") or ""
         else:
             site_code_val = getattr(site, "code_site", getattr(site, "code", ""))
             site_nom_val = getattr(site, "nom", "Site")
@@ -231,6 +232,7 @@ def open_inspection_dialog(site):
             active_proto_id = getattr(
                 site, "active_protocol_id", getattr(site, "protocol_id", None)
             )
+            site_protocole_conf_val = getattr(site, "protocole_confinement", "") or ""
 
         print(f"🔍 [DEBUG] Ouverture dialogue pour : {site_nom_val} ({site_code_val})")
 
@@ -364,7 +366,7 @@ def open_inspection_dialog(site):
                 ).props("color=blue sm").classes("mt-2 self-end")
 
             # ----------------------------------------------------------------------
-            # 2. Gestion Dynamique des Protocoles du Site
+            # 2. Fiche & Identité du Site (+ protocole de confinement S4 par défaut)
             # ----------------------------------------------------------------------
             with ui.expansion(
                 "📜 Éditer la Fiche & Identité du Site", icon="edit"
@@ -378,13 +380,18 @@ def open_inspection_dialog(site):
                             label="Localisation", value=site_loc_val
                         ).classes("w-1/2")
 
+                    edit_protocole_conf = ui.textarea(
+                        label="Protocole de confinement S4 (texte par défaut affiché au poste de garde si aucun protocole S4 actif)",
+                        value=site_protocole_conf_val,
+                    ).classes("w-full").props("rows=4")
+
                     async def update_info_base():
                         ok = await asyncio.to_thread(
                             DatabaseService.update_site_info,
                             site_id_val,
                             edit_nom.value,
                             edit_loc.value,
-                            None,
+                            edit_protocole_conf.value,
                         )
                         if ok:
                             ui.notify(
@@ -397,6 +404,191 @@ def open_inspection_dialog(site):
                         icon="check",
                         on_click=update_info_base,
                     ).props("color=blue sm")
+
+            # ----------------------------------------------------------------------
+            # 2b. ÉDITEUR DE PROTOCOLES DU SITE (niveaux S1-S4 / T1-T4)
+            #     -> table centaure_site_protocols (site_code, niveau, titre, consignes)
+            # ----------------------------------------------------------------------
+            with ui.expansion(
+                f"📖 Protocoles du site {site_code_val} — niveaux S1-S4 / T1-T4",
+                icon="menu_book",
+            ).classes("w-full bg-slate-800 border border-slate-700 rounded my-2"):
+                with ui.column().classes("p-4 gap-3 w-full"):
+                    ui.label(
+                        "Protocoles spécifiques à ce site, un par niveau de posture. "
+                        "Celui retenu lors du changement de niveau S/T devient le protocole actif "
+                        "(affiché au poste de garde)."
+                    ).classes("text-xs text-slate-400 italic")
+
+                    NIVEAUX_PROTOCOLE = ["S1", "S2", "S3", "S4", "T1", "T2", "T3", "T4"]
+
+                    def badge_couleur_niveau(niveau: str) -> str:
+                        return {
+                            "S1": "green", "S2": "amber", "S3": "orange", "S4": "red",
+                            "T1": "green", "T2": "amber", "T3": "orange", "T4": "red",
+                        }.get(str(niveau).upper(), "grey")
+
+                    async def open_protocol_editor(protocol_id=None):
+                        """Sous-dialogue d'édition d'un protocole (None = création)."""
+                        existing = None
+                        if protocol_id:
+                            protos = (
+                                await asyncio.to_thread(
+                                    DatabaseService.get_site_protocols, site_code_val
+                                )
+                                or []
+                            )
+                            existing = next(
+                                (p for p in protos if p.get("id") == protocol_id), None
+                            )
+
+                        with ui.dialog() as proto_dialog, ui.card().classes(
+                            "w-full max-w-xl bg-slate-900 border border-slate-700 text-slate-100 p-6"
+                        ):
+                            ui.label(
+                                "✏️ Modifier le protocole"
+                                if existing
+                                else "➕ Nouveau protocole"
+                            ).classes("text-lg font-bold text-blue-400 mb-3")
+                            sel_niveau = ui.select(
+                                options=NIVEAUX_PROTOCOLE,
+                                value=str((existing or {}).get("niveau", "S1")).upper(),
+                                label="Niveau de posture",
+                            ).classes("w-40")
+                            inp_titre = ui.input(
+                                label="Titre du protocole",
+                                value=(existing or {}).get("titre", ""),
+                            ).classes("w-full")
+                            inp_consignes = ui.textarea(
+                                label="Consignes (une action par ligne)",
+                                value=(existing or {}).get("consignes", ""),
+                            ).classes("w-full").props("rows=8")
+
+                            async def save_protocol():
+                                if not (inp_titre.value or "").strip():
+                                    ui.notify("Le titre est obligatoire.", type="warning")
+                                    return
+                                payload = {
+                                    "site_code": site_code_val,
+                                    "niveau": sel_niveau.value,
+                                    "titre": inp_titre.value,
+                                    "consignes": inp_consignes.value or "",
+                                }
+                                if existing:
+                                    payload["id"] = existing.get("id")
+                                ok = await asyncio.to_thread(
+                                    DatabaseService.save_site_protocol, payload
+                                )
+                                if ok:
+                                    ui.notify("Protocole enregistré !", type="positive")
+                                    proto_dialog.close()
+                                    await refresh_protocols_list()
+                                    await load_protocols_for_select()
+                                else:
+                                    ui.notify(
+                                        "Erreur lors de l'enregistrement du protocole.",
+                                        type="negative",
+                                    )
+
+                            with ui.row().classes("justify-end w-full gap-2 mt-4"):
+                                ui.button("Annuler", on_click=proto_dialog.close).props(
+                                    "flat color=grey"
+                                )
+                                ui.button(
+                                    "Enregistrer", icon="save", on_click=save_protocol
+                                ).props("color=blue")
+
+                        proto_dialog.open()
+
+                    def confirm_delete_protocol(protocol_id):
+                        with ui.dialog() as del_d, ui.card().classes(
+                            "bg-slate-900 border border-red-800 text-white p-6"
+                        ):
+                            ui.label(
+                                "Supprimer définitivement ce protocole du site ?"
+                            ).classes("text-base font-bold text-red-400 mb-4")
+                            with ui.row().classes("justify-end gap-2 w-full"):
+                                ui.button("Annuler", on_click=del_d.close).props(
+                                    "flat color=grey"
+                                )
+
+                                async def do_delete():
+                                    ok = await asyncio.to_thread(
+                                        DatabaseService.delete_site_protocol, protocol_id
+                                    )
+                                    if ok:
+                                        ui.notify("Protocole supprimé.", type="negative")
+                                        del_d.close()
+                                        await refresh_protocols_list()
+                                        await load_protocols_for_select()
+                                    else:
+                                        ui.notify(
+                                            "Erreur lors de la suppression.",
+                                            type="negative",
+                                        )
+
+                                ui.button("Supprimer", color="red", on_click=do_delete)
+                        del_d.open()
+
+                    protocols_container = ui.column().classes("w-full gap-2")
+
+                    async def refresh_protocols_list():
+                        """Recharge et ré-affiche la liste des protocoles du site."""
+                        try:
+                            protocols = (
+                                await asyncio.to_thread(
+                                    DatabaseService.get_site_protocols, site_code_val
+                                )
+                                or []
+                            )
+                        except Exception as e:
+                            print(f"⚠️ Erreur chargement liste protocoles: {e}")
+                            protocols = []
+                        protocols_container.clear()
+                        with protocols_container:
+                            if not protocols:
+                                ui.label(
+                                    "Aucun protocole défini pour ce site."
+                                ).classes("text-sm text-slate-500 italic")
+                            for p in protocols:
+                                pid = p.get("id")
+                                niveau = str(p.get("niveau", "")).upper()
+                                consignes = (p.get("consignes") or "").replace("\n", " ")
+                                if len(consignes) > 140:
+                                    consignes = consignes[:140] + "…"
+                                with ui.row().classes(
+                                    "w-full items-start justify-between bg-slate-900/70 p-3 rounded border border-slate-700 gap-2"
+                                ):
+                                    with ui.column().classes("gap-0 flex-1"):
+                                        with ui.row().classes("items-center gap-2"):
+                                            ui.badge(
+                                                niveau, color=badge_couleur_niveau(niveau)
+                                            ).classes("font-bold")
+                                            ui.label(p.get("titre", "")).classes(
+                                                "font-bold text-sm text-slate-100"
+                                            )
+                                        ui.label(consignes).classes(
+                                            "text-xs text-slate-400"
+                                        )
+                                    with ui.row().classes("gap-1"):
+                                        ui.button(
+                                            icon="edit",
+                                            on_click=lambda pid=pid: open_protocol_editor(pid),
+                                        ).props("flat round dense color=blue-4").tooltip(
+                                            "Modifier ce protocole"
+                                        )
+                                        ui.button(
+                                            icon="delete",
+                                            on_click=lambda pid=pid: confirm_delete_protocol(pid),
+                                        ).props("flat round dense color=red-4").tooltip(
+                                            "Supprimer ce protocole"
+                                        )
+
+                    ui.button(
+                        "➕ Ajouter un protocole",
+                        icon="add",
+                        on_click=lambda: open_protocol_editor(None),
+                    ).props("color=blue-4 outline sm").classes("self-start")
 
             # ----------------------------------------------------------------------
             # 3. SÉCURITÉ POSTE DE GARDE : LIEN KIOSQUE SÉCURISÉ (ACCÈS DIRECT)
@@ -517,8 +709,12 @@ def open_inspection_dialog(site):
                     "color=slate-700 text-slate-200"
                 )
 
-            # Chargement initial des protocoles au show
-            dialog.on("show", load_protocols_for_select)
+            # Chargement initial au show : select de posture + liste des protocoles du site
+            async def _on_dialog_show():
+                await load_protocols_for_select()
+                await refresh_protocols_list()
+
+            dialog.on("show", _on_dialog_show)
 
         dialog.open()
 

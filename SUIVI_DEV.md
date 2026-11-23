@@ -1,9 +1,8 @@
 # 📋 CENTAURE — Suivi de Développement
 
-**Dernière mise à jour :** 23/11/2026 — éditeur de protocoles par site (v1.2.0) :
-recette navigateur VALIDÉE, **commit local effectué** — **push GitHub + déploiement
-PROD Fly.io EN ATTENTE** (à faire depuis le domicile, voir § Séance du 23/11, suite) ;
-avant : 17/11/2026 soir push + déploiement PROD v36 (recette OK)
+**Dernière mise à jour :** 23/11/2026 soir (depuis le domicile) — éditeur de protocoles
+par site **v1.2.0 POUSSÉ et DÉPLOYÉ EN PROD** (Fly.io v37, recette en ligne OK — voir
+§ Séance du 23/11, suite 2) ; avant : 17/11/2026 soir push + déploiement PROD v36
 **Branche :** `main` — refonte PCO + fin COS + écran mural **committés et
 poussés** ( **Serveur DEV local ARRÊTÉ proprement le 14/11 au soir** — port
 8080 libéré (curl → 000) ; relance demain :
@@ -80,15 +79,30 @@ Tests non réalisés :
 
 ### 23/11 (suite) — Recette validée, commit local, PROD en attente
 
-- **Recette navigateur validée par l'utilisateur** (« c'est tout bon, ça a l'air correct »).
-- **Commit local effectué** (code `app/ui/cockpit.py` + `app/core/config.py`, puis commit
-  docs `SUIVI_DEV.md` / `CONTEXT.md` / `DOCS_EXPLOITATION.md` nouveau) — **pas de push**.
-- **Push `origin main` + `flyctl deploy --remote-only -a gnc-centaure` : EN ATTENTE** —
-  à faire depuis le domicile (décision utilisateur 23/11). Serveur DEV laissé tournant
-  en local pendant la recette (port 8080) — à arrêter proprement avant le deploy.
-- Docs : `SUIVI_DEV.md` (cette entrée), `CONTEXT.md` (tables protocoles réelles +
-  fonctionnement v1.2.0), **`DOCS_EXPLOITATION.md` créé** (procédure opérateur :
-  saisir/activer les protocoles S1–S4/T1–T4, lecture kiosk, niveaux, rôles, commandes).
+- **Recette navigateur validée par l'utilisateur** (« c'est tout bon, ça a l'air correct » :
+  ajout / modification / suppression de protocoles testés dans « Gérer » du site).
+- **Commits locaux** : `5d90bed` (code cockpit.py + config.py v1.2.0) et `afd39a5`
+  (docs SUIVI_DEV / CONTEXT / DOCS_EXPLOITATION nouveau).
+- Docs : `CONTEXT.md` (tables protocoles réelles + fonctionnement v1.2.0),
+  **`DOCS_EXPLOITATION.md` créé** (procédure opérateur : saisir/activer les protocoles
+  S1–S4/T1–T4, lecture kiosk, niveaux, rôles, commandes).
+
+### 23/11 (suite 2) — Push GitHub + déploiement PROD Fly.io v37 (depuis le domicile)
+
+- Serveur DEV arrêté proprement avant deploy (process arrêté, port 8080 → curl 000).
+- `git push origin main` : `56d873e..afd39a5` → remote main = `afd39a5` (0 commit en attente).
+- `flyctl auth login` re-effectué (session expirée) puis
+  `flyctl deploy --remote-only -a gnc-centaure` → exit 0 ; machine `784756dc5e3758`
+  passée en **version 37**, état `started`, **1 check passing**, image
+  `gnc-centaure:deployment-01M83N0FEX5BQ041H4VNDVAKJ4`, région syd.
+- **Recette en ligne** https://gnc-centaure.fly.dev : `/`, `/login`, `/kiosk`,
+  `/kiosk?token=invalide`, `/wall`, `/wall?token=<DINUM>`, `/kiosk?token=<DINUM>`,
+  `/site/DINUM` → **8/8 en 200** ; `/login` affiche « … • **v1.2.0** ».
+- Logs prod : « CENTAURE Démarré | Mode: PRODUCTION | Port: 8080 », health check
+  passing après 3 s, « Accès Kiosque accordé pour le site : DINUM », « Accès Écran
+  Mural accordé », token invalide rejeté proprement (22P02 géré). L'utilisateur a
+  déjà rouvert le dialogue « Gérer » de DOUMER en PROD (log 07:34).
+- Commit docs de clôture (cette entrée) poussé après le deploy.
 
 ---
 
